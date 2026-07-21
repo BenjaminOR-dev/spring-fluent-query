@@ -32,6 +32,7 @@ Spring Fluent Query adds a readable chain (`where` → `fetch` → `latest` / `f
 - Portable LIKE by default (`UPPER` + `LIKE`); optional Oracle unaccent mode
 - Core usable without the Boot starter (`spring-fluent-query-core`)
 
+<a id="why-use-fluent-query"></a>
 ## Why use Fluent Query?
 
 Spring Data already has Specifications and `JpaSpecificationExecutor.findBy`, but composing many **optional** filters stays verbose, and common patterns (latest row, to-one fetch + page) are easy to get wrong or expensive.
@@ -77,7 +78,7 @@ You can still mix typed `Specification`s with string-column helpers on the same 
   - [Projections (`as`) and `select`](#projections-as-and-select)
   - [Typed Specifications](#typed-specifications)
 - [PropertyFilters](#propertyfilters)
-- [Boot 3.x / 4.x compatibility](#boot-3x--4x-compatibility)
+- [Boot 3.x / 4.x compatibility](#boot-3-4-compatibility)
 - [Module architecture](#module-architecture)
 - [Executable reference (example)](#executable-reference-example)
 - [Troubleshooting](#troubleshooting)
@@ -86,6 +87,7 @@ You can still mix typed `Specification`s with string-column helpers on the same 
 - [Roadmap](#roadmap)
 - [License](#license)
 
+<a id="requirements"></a>
 ## Requirements
 
 - **Java 17+**
@@ -99,6 +101,7 @@ You can still mix typed `Specification`s with string-column helpers on the same 
 
 The same starter JAR works on both. Auto-config ordering uses `afterName` with Hibernate JPA FQCNs for **Boot 3 and Boot 4** packages.
 
+<a id="which-dependencies-do-i-install"></a>
 ### Which dependencies do I install?
 
 | Dependency | Do you add it? | When |
@@ -114,10 +117,12 @@ The same starter JAR works on both. Auto-config ordering uses `afterName` with H
 | `spring-fluent-query-core` | Included by the starter |
 | `spring-data-jpa` | Comes with `spring-boot-starter-data-jpa` |
 
+<a id="without-spring-boot"></a>
 ### Without Spring Boot
 
 Use `spring-fluent-query-core` and wire `FluentQuery.of(executor)` (or `FluentQuery.of(executor, filters)`) yourself. Details in [Module architecture](#module-architecture).
 
+<a id="quick-start"></a>
 ## Quick start
 
 ### 1. Dependencies
@@ -191,6 +196,7 @@ Optional<User> user = userRepository.query()
 > All Java blocks in this README include **full imports** so you can copy and paste without guessing the origin.
 
 
+<a id="crud-pattern"></a>
 ## CRUD pattern
 
 `FluentQueryRepository` is still a Spring Data `JpaRepository`: **writes** use `save` / `delete`, **reads** (and filtered bulk delete) use `query()`.
@@ -294,42 +300,49 @@ public class UserService {
 | **Delete one** | `query().where("id", id).first()` → `repository.delete(entity)` (or `findById` / `deleteById`) |
 | **Delete many** | `query().where(...).delete()` — deletes **all** matches; scope the filter carefully |
 
-The runnable example module walks through this flow on startup (`DemoCrudService`).
+The runnable example module walks through this flow on startup ([`DemoCrudService`](spring-fluent-query-example/src/main/java/dev/benjaminor/fluentquery/example/DemoCrudService.java)).
 
+<a id="configuration"></a>
 ## Configuration
 
 The starter registers `SpringFluentQueryAutoConfiguration` after Hibernate JPA (Boot 3 and Boot 4 FQCNs) and applies `spring.fluent-query.*` to `FluentQueryDefaults`.
 
+<a id="like-mode"></a>
 ### LIKE mode
 
-By default LIKE is **portable** Criteria: `UPPER(column) LIKE %VALUE%` (works on H2, PostgreSQL, MySQL, SQL Server, Oracle, …).
+Property: `spring.fluent-query.like-mode` (enum [`LikeMode`](spring-fluent-query-core/src/main/java/dev/benjaminor/fluentquery/LikeMode.java)).
 
-For Oracle accent folding via `CONVERT(..., 'US7ASCII')`:
+There is **no per-database switch** for H2 / PostgreSQL / MySQL / SQL Server — only these two values:
+
+| Value (YAML / properties) | Enum | SQL shape | Use when |
+|---------------------------|------|-----------|----------|
+| `portable` (**default**) | `LikeMode.PORTABLE` | `UPPER(column) LIKE %VALUE%` | Any DB that Hibernate supports (H2, PostgreSQL, MySQL, SQL Server, Oracle, …) |
+| `oracle-unaccent` | `LikeMode.ORACLE_UNACCENT` | `UPPER(CONVERT(column, 'US7ASCII')) LIKE %VALUE%` | Oracle only, when you need accent folding |
 
 **YAML**
 
 ```yaml
 spring:
   fluent-query:
-    like-mode: oracle-unaccent
+    like-mode: portable          # default — omit to keep this
+    # like-mode: oracle-unaccent # Oracle accent folding only
 ```
 
 **Properties**
 
 ```properties
-spring.fluent-query.like-mode=oracle-unaccent
+spring.fluent-query.like-mode=portable
+# spring.fluent-query.like-mode=oracle-unaccent
 ```
 
-| Property | Default | Description |
-|----------|---------|-------------|
-| `spring.fluent-query.like-mode` | `portable` | `portable` → `UPPER(column) LIKE %VALUE%`; `oracle-unaccent` → `UPPER(CONVERT(column, 'US7ASCII')) LIKE %VALUE%` |
+`oracle-unaccent` is **not** portable: H2 / PostgreSQL / MySQL reject Oracle `CONVERT(..., 'US7ASCII')`. Keep `portable` unless you run on Oracle and need unaccented matching.
 
-`oracle-unaccent` is Oracle-specific and is **not** portable to H2 / PostgreSQL / MySQL.
+No other `spring.fluent-query.*` properties exist today — extend `FluentQueryRepository` and call `query()`.
 
-No other properties are required for basic use — extend `FluentQueryRepository` and call `query()`.
-
+<a id="usage-guide"></a>
 ## Usage guide
 
+<a id="reference-imports"></a>
 ### Reference imports
 
 | Source | Typical import | When |
@@ -339,6 +352,7 @@ No other properties are required for basic use — extend `FluentQueryRepository
 | Spring Data | `import org.springframework.data.domain.*;` | `Pageable`, `Page`, `Slice`, `Sort` |
 | Spring Data JPA | `import org.springframework.data.jpa.domain.Specification;` | Typed scopes |
 
+<a id="strict-filters-where-orwhere-groups"></a>
 ### Strict filters (`where*`, `orWhere*`, groups)
 
 `where*` / `orWhere*` are **strict**: the predicate **always** applies.
@@ -381,6 +395,7 @@ userRepository.query()
         .first();
 ```
 
+<a id="optional-filters-optionalwhere"></a>
 ### Optional filters (`optionalWhere*`)
 
 Use these for **search endpoints**: if the value is missing (`null` / blank / empty collection), the predicate is a **no-op**.
@@ -404,6 +419,7 @@ Also: `optionalWhereEqual`, `optionalWhereContains` / `StartsWith` / `EndsWith` 
 
 `whereIf` / `when` / `unless` are different: they take an explicit **boolean**, not “value present?”.
 
+<a id="conditionals-whereif-when-unless"></a>
 ### Conditionals (`whereIf`, `when`, `unless`)
 
 ```java
@@ -420,6 +436,7 @@ List<User> users = userRepository.query()
         .get();
 ```
 
+<a id="comparisons-ranges-like-in"></a>
 ### Comparisons, ranges, like, in
 
 ```java
@@ -454,6 +471,7 @@ Aliases: `whereGt` / `whereGte` / `whereLt` / `whereLte` map to the longer `wher
 
 LIKE strategy follows [`spring.fluent-query.like-mode`](#configuration) (default `portable`). Strict LIKE rejects blank strings (`IllegalArgumentException`); use `optionalWhere*` for search params.
 
+<a id="date-and-time-extracts"></a>
 ### Date and time extracts
 
 Uses Criteria `cb.function` with lowercase names Hibernate maps portably (`year`, `month`, `day`, `hour`, `minute`, `second`) across H2 / PostgreSQL / MySQL / Oracle dialects.
@@ -473,6 +491,7 @@ List<Order> orders = orderRepository.query()
 
 Optional variants (`optionalWhereDate` / `Year` / `Month` / `Day` / `Time`) skip when the value is `null`. Same helpers exist on `RelatedFilter`.
 
+<a id="column-to-column-wherecolumn"></a>
 ### Column-to-column (`whereColumn`)
 
 ```java
@@ -487,6 +506,7 @@ List<Author> authors = authorRepository.query()
 
 `<>` is normalized to `!=`. Invalid operators throw `IllegalArgumentException`. Metamodel: `whereColumn(SingularAttribute, SingularAttribute)` (+ operator overload).
 
+<a id="relation-filters"></a>
 ### Relation filters
 
 ```java
@@ -524,6 +544,7 @@ List<Author> authors = authorRepository.query()
 
 `RelatedFilter` mirrors the main builder for nested predicates: `where` / `whereEqual` / `whereLike` / `whereContains` / `whereStartsWith` / `whereEndsWith` / `whereLikePattern` / `whereIn` / `whereNotIn` / comparisons (`whereGt`… + long forms) / ranges / date extracts / full `optionalWhere*` family (including escaped LIKE optionals), etc. Nested LIKE also respects `spring.fluent-query.like-mode`.
 
+<a id="type-safe-metamodel"></a>
 ### Type-safe metamodel
 
 When the host project generates the **JPA static metamodel** (`User_`, `Order_`, …), `FluentQuery` overloads accept `SingularAttribute` / `PluralAttribute` and delegate to the string APIs via `attribute.getName()`.
@@ -548,6 +569,7 @@ List<Author> withLongBooks = authorRepository.query()
 
 Enable metamodel generation in the host (annotation processor / Hibernate JPamodelgen, or your stack’s equivalent). The library itself does not ship generated `*_` classes.
 
+<a id="fetch-select-distinct-limit-order"></a>
 ### Fetch, select, distinct, limit, order
 
 | Method | Use for | With `page` / `slice` / `paginate` / `chunk` |
@@ -581,6 +603,7 @@ userRepository.query()
 
 Prefer loading collections in a **second query**, or use `get()` / `first()` without pagination when you truly need collection fetch.
 
+<a id="terminals"></a>
 ### Terminals
 
 | Terminal | Result | Notes |
@@ -634,6 +657,7 @@ try (Stream<User> stream = userRepository.query()
 
 **Builder contract:** each `query()` builder is **single-use** and **not thread-safe**. Do not share one instance across threads or reuse after a terminal.
 
+<a id="pagination-and-chunking"></a>
 ### Pagination and chunking
 
 ```java
@@ -662,6 +686,7 @@ userRepository.query()
 
 `chunk` uses `slice` under the hood (no COUNT). Prefer a stable `orderBy*` so batches do not skip or duplicate rows.
 
+<a id="projections-as-and-select"></a>
 ### Projections (`as`) and `select`
 
 Uses Spring Data’s `SpecificationFluentQuery.as(Class)` — interface/DTO projections **without** entity join-fetch.
@@ -708,6 +733,7 @@ Page<UserSummary> page = userRepository.query()
 
 Also: `select(User_.id, User_.email)` when the static metamodel is available.
 
+<a id="typed-specifications"></a>
 ### Typed Specifications
 
 Prefer typed Specs for domain rules; use `where("col", val)` for simple equality:
@@ -738,6 +764,7 @@ Specification<User> spec = userRepository.query()
         .toSpecification();
 ```
 
+<a id="propertyfilters"></a>
 ## PropertyFilters
 
 `FluentQueryRepository` already extends `PropertyFilters`. When you call `query()`, the builder wires those filters automatically.
@@ -749,6 +776,7 @@ Advanced options:
 - Implement only `PropertyFilters` on a custom repository
 - Call `FluentQuery.of(executor)` (no rich filters) or `FluentQuery.of(executor, filters)` manually
 
+<a id="boot-3-4-compatibility"></a>
 ## Boot 3.x / 4.x compatibility
 
 | Mechanism | Detail |
@@ -764,6 +792,7 @@ mvn clean verify          # Boot 3.x BOM
 mvn clean verify -Pboot4  # Boot 4.x BOM
 ```
 
+<a id="module-architecture"></a>
 ## Module architecture
 
 ```text
@@ -783,18 +812,21 @@ spring-fluent-query/
 └── spring-fluent-query-example/              # Not publishable. Minimal demo.
 ```
 
+Key sources: [`FluentQuery`](spring-fluent-query-core/src/main/java/dev/benjaminor/fluentquery/FluentQuery.java) · [`FluentQueryRepository`](spring-fluent-query-core/src/main/java/dev/benjaminor/fluentquery/FluentQueryRepository.java) · [`PropertyFilters`](spring-fluent-query-core/src/main/java/dev/benjaminor/fluentquery/PropertyFilters.java) · [`RelatedFilter`](spring-fluent-query-core/src/main/java/dev/benjaminor/fluentquery/RelatedFilter.java)
+
 | Maven artifact | When to use it |
 |----------------|----------------|
-| `spring-fluent-query-spring-boot-starter` | Spring Boot apps (recommended) |
-| `spring-fluent-query-core` | Libraries / custom wiring without Boot auto-config |
+| [`spring-fluent-query-spring-boot-starter`](spring-fluent-query-spring-boot-starter/) | Spring Boot apps (recommended) |
+| [`spring-fluent-query-core`](spring-fluent-query-core/) | Libraries / custom wiring without Boot auto-config |
 
 **Auto-configuration included in the starter:**
 
 | Class | Responsibility |
 |-------|----------------|
-| `SpringFluentQueryAutoConfiguration` | After Hibernate JPA (Boot 3 + 4); applies `like-mode` to `FluentQueryDefaults` |
-| `SpringFluentQueryProperties` | Binds `spring.fluent-query.like-mode` |
+| [`SpringFluentQueryAutoConfiguration`](spring-fluent-query-spring-boot-starter/src/main/java/dev/benjaminor/fluentquery/autoconfigure/SpringFluentQueryAutoConfiguration.java) | After Hibernate JPA (Boot 3 + 4); applies `like-mode` to `FluentQueryDefaults` |
+| [`SpringFluentQueryProperties`](spring-fluent-query-spring-boot-starter/src/main/java/dev/benjaminor/fluentquery/autoconfigure/SpringFluentQueryProperties.java) | Binds `spring.fluent-query.like-mode` |
 
+<a id="executable-reference-example"></a>
 ## Executable reference (example)
 
 The **`spring-fluent-query-example`** module is a minimal runnable app (H2 + `FluentQueryRepository`).
@@ -809,10 +841,11 @@ Or without Docker:
 mvn -pl spring-fluent-query-example spring-boot:run
 ```
 
-On startup it runs a full **Create / Read / Update / Delete** sample via `DemoCrudService` (see logs).
+On startup it runs a full **Create / Read / Update / Delete** sample via [`DemoCrudService`](spring-fluent-query-example/src/main/java/dev/benjaminor/fluentquery/example/DemoCrudService.java) (see logs).
 
-The example module also includes H2 `@DataJpaTest` coverage (`FluentQueryDataJpaIT`) for nested `whereHas`, date extracts, `whereColumn`, `whereNotBetween`, `orWhereHas`, `whereRelation`, `unless`, `firstOrFail` / `oneOrFail`, `paginate`, `select` + `firstAs`, optionals, `delete()`, and `fetchCollection` + `page` rejection.
+The example module also includes H2 `@DataJpaTest` coverage ([`FluentQueryDataJpaIT`](spring-fluent-query-example/src/test/java/dev/benjaminor/fluentquery/example/it/FluentQueryDataJpaIT.java)) for nested `whereHas`, date extracts, `whereColumn`, `whereNotBetween`, `orWhereHas`, `whereRelation`, `unless`, `firstOrFail` / `oneOrFail`, `paginate`, `select` + `firstAs`, optionals, `delete()`, and `fetchCollection` + `page` rejection.
 
+<a id="troubleshooting"></a>
 ## Troubleshooting
 
 ### `query()` is not available on my repository
@@ -850,8 +883,10 @@ If you need a personalized name in the API result, define it on the projection i
 
 Ensure you use the published starter (imports file under `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`) and that `JpaSpecificationExecutor` is on the classpath (`spring-boot-starter-data-jpa`).
 
+<a id="api-reference"></a>
 ## API reference
 
+<a id="filters"></a>
 ### Filters
 
 | Method | Description |
@@ -879,6 +914,7 @@ Ensure you use the published starter (imports file under `META-INF/spring/org.sp
 | Metamodel overloads | String APIs above with `SingularAttribute` / `PluralAttribute` (filters, related, has/doesntHave, `select`, order, fetch) |
 | `of(executor)` / `of(executor, filters)` / `query()` | Factory / repository entry points |
 
+<a id="load-shape"></a>
 ### Load / shape
 
 | Method | Description |
@@ -890,6 +926,7 @@ Ensure you use the published starter (imports file under `META-INF/spring/org.sp
 | `limit` | Max rows for list terminals |
 | `orderByAsc` / `orderByDesc` / `orderBy` | Sorting |
 
+<a id="terminals-api"></a>
 ### Terminals
 
 | Method | Description |
@@ -909,6 +946,7 @@ Ensure you use the published starter (imports file under `META-INF/spring/org.sp
 | `delete` | Delete matching rows (`CrudRepository#deleteAll`) |
 | `toSpecification` / `toSelectSpecification` / `toSort` | Inspect composition |
 
+<a id="development"></a>
 ## Development
 
 ```text
@@ -945,11 +983,13 @@ mvn -pl spring-fluent-query-example spring-boot:run
 
 Releases are published to Maven Central — see [PUBLISHING.md](PUBLISHING.md) (maintainers).
 
+<a id="roadmap"></a>
 ## Roadmap
 
 - Richer example module (REST + sample queries)
 - `autoPublish=true` in Central Portal when release automation is stable
 
+<a id="license"></a>
 ## License
 
 Copyright © 2026 **Benjamín Olvera R.**
