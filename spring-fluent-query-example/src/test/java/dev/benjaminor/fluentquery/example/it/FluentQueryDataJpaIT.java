@@ -6,10 +6,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
-import org.springframework.boot.autoconfigure.domain.EntityScan;
-import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.test.context.TestPropertySource;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -18,15 +19,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * H2 {@link DataJpaTest} coverage for FluentQuery relation filters, optionals, delete, and fetch rules.
- * Nested {@link Config} keeps the example {@code CommandLineRunner} out of the slice.
+ * H2 coverage for FluentQuery relation filters, optionals, delete, and fetch rules.
+ * Uses {@link SpringBootTest} (not {@code @DataJpaTest}) so the same sources compile on Boot 3.x
+ * and 4.x — Boot 4 moved {@code DataJpaTest}/{@code EntityScan} to modular packages/jars.
+ * Nested {@link Config} keeps the example {@code CommandLineRunner} out of the context.
  */
-@DataJpaTest
+@SpringBootTest(classes = FluentQueryDataJpaIT.Config.class)
+@TestPropertySource(properties = {
+        "spring.datasource.url=jdbc:h2:mem:fluentquery-it;DB_CLOSE_DELAY=-1;MODE=LEGACY",
+        "spring.jpa.hibernate.ddl-auto=create-drop"
+})
+@Transactional
 class FluentQueryDataJpaIT {
 
     @SpringBootConfiguration
     @EnableAutoConfiguration
-    @EntityScan(basePackageClasses = Author.class)
     @EnableJpaRepositories(basePackageClasses = AuthorRepository.class)
     static class Config {
     }
