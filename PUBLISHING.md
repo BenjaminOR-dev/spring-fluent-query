@@ -69,13 +69,13 @@ Para flujos sin Docker, puedes usar [docs/settings-central.xml.example](docs/set
 | `spring-fluent-query-example/pom.xml` | `<version>` del parent |
 
 ```xml
-<version>0.1.0</version>
+<version>0.1.1</version>
 ```
 
 ```xml
 <scm>
     ...
-    <tag>v0.1.0</tag>
+    <tag>v0.1.1</tag>
 </scm>
 ```
 
@@ -92,11 +92,11 @@ En cada uno actualiza **Maven**, **Gradle Kotlin** y **Gradle Groovy**:
 Ejemplo:
 
 ```xml
-<version>0.1.0</version>
+<version>0.1.1</version>
 ```
 
 ```kotlin
-implementation("io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:0.1.0")
+implementation("io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:0.1.1")
 ```
 
 #### Opcional (recomendado)
@@ -192,8 +192,8 @@ En unos minutos debería aparecer en [search.maven.org](https://search.maven.org
 El tag debe apuntar al **commit del paso 1** (POMs + README + `<scm><tag>` ya incluidos):
 
 ```bash
-git tag -a v0.1.0 -m "Release 0.1.0"
-git push origin v0.1.0
+git tag -a v0.1.1 -m "Release 0.1.1"
+git push origin v0.1.1
 ```
 
 Eso **solo** crea el draft en GitHub; el deploy a Maven ocurre cuando publiques el Release.
@@ -203,7 +203,7 @@ Eso **solo** crea el draft en GitHub; el deploy a Maven ocurre cuando publiques 
 En los **4 POMs** (mismo listado del paso 1), commit separado en `main`:
 
 ```xml
-<version>0.1.0-SNAPSHOT</version>
+<version>0.1.1-SNAPSHOT</version>
 ```
 
 Los README **no** cambian aquí — siguen mostrando la última versión publicada en Central.
@@ -216,14 +216,14 @@ Los README **no** cambian aquí — siguen mostrando la última versión publica
 <dependency>
     <groupId>io.github.benjaminor-dev</groupId>
     <artifactId>spring-fluent-query-spring-boot-starter</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.1</version>
 </dependency>
 ```
 
 **Gradle**
 
 ```kotlin
-implementation("io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:0.1.0")
+implementation("io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:0.1.1")
 ```
 
 Sin repositorios extra. Añade también `spring-boot-starter-data-jpa` en tu app (el starter lo marca como opcional).

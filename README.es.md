@@ -130,7 +130,7 @@ Añade el starter de Fluent Query **y** Spring Data JPA:
 <dependency>
     <groupId>io.github.benjaminor-dev</groupId>
     <artifactId>spring-fluent-query-spring-boot-starter</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.1</version>
 </dependency>
 <dependency>
     <groupId>org.springframework.boot</groupId>
@@ -141,14 +141,14 @@ Añade el starter de Fluent Query **y** Spring Data JPA:
 **Gradle (Kotlin DSL)**
 
 ```kotlin
-implementation("io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:0.1.0")
+implementation("io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:0.1.1")
 implementation("org.springframework.boot:spring-boot-starter-data-jpa")
 ```
 
 **Gradle (Groovy)**
 
 ```groovy
-implementation 'io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:0.1.0'
+implementation 'io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:0.1.1'
 implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 ```
 
