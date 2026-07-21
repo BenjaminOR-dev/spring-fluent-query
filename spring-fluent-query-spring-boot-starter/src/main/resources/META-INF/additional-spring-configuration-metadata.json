@@ -1,0 +1,17 @@
+{
+  "groups": [
+    {
+      "name": "spring.fluent-query",
+      "type": "dev.benjaminor.fluentquery.autoconfigure.SpringFluentQueryProperties",
+      "description": "Spring Fluent Query settings."
+    }
+  ],
+  "properties": [
+    {
+      "name": "spring.fluent-query.like-mode",
+      "type": "dev.benjaminor.fluentquery.LikeMode",
+      "defaultValue": "portable",
+      "description": "LIKE strategy: portable (UPPER+LIKE, all DBs) or oracle-unaccent (Oracle CONVERT US7ASCII)."
+    }
+  ]
+}

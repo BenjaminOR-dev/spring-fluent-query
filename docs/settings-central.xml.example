@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  For Docker deploy, prefer .env (see .env.example in the repo root).
+  For host Maven, copy to ~/.m2/settings.xml (merge with existing settings).
+
+  Central Portal: https://central.sonatype.com/usertoken
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.2.0 https://maven.apache.org/xsd/settings-1.2.0.xsd">
+
+    <servers>
+        <server>
+            <id>central</id>
+            <username><!-- Central Portal token username --></username>
+            <password><!-- Central Portal token password --></password>
+        </server>
+    </servers>
+
+    <profiles>
+        <profile>
+            <id>release</id>
+            <properties>
+                <!-- gpg --list-secret-keys --keyid-format long -->
+                <gpg.keyname>XXXXXXXXXXXXXXXX</gpg.keyname>
+            </properties>
+        </profile>
+    </profiles>
+
+</settings>
