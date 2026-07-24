@@ -29,10 +29,14 @@ class LikePatternsTest {
     }
 
     @Test
-    void hasWildcard() {
-        assertThat(LikePatterns.hasWildcard("plain")).isFalse();
-        assertThat(LikePatterns.hasWildcard("a%")).isTrue();
-        assertThat(LikePatterns.hasWildcard("a_b")).isTrue();
-        assertThat(LikePatterns.hasWildcard(null)).isFalse();
+    void toPattern_usesLocaleRoot() {
+        // Turkish locale must not affect i/I mapping for library patterns
+        java.util.Locale previous = java.util.Locale.getDefault();
+        try {
+            java.util.Locale.setDefault(java.util.Locale.forLanguageTag("tr-TR"));
+            assertThat(LikePatterns.toPattern("title")).isEqualTo("%TITLE%");
+        } finally {
+            java.util.Locale.setDefault(previous);
+        }
     }
 }

@@ -1,12 +1,16 @@
 package dev.benjaminor.fluentquery.support;
 
+import java.util.Locale;
+
 /**
  * Builds case-insensitive {@code LIKE} patterns for {@link dev.benjaminor.fluentquery.FluentQuery}.
+ *
+ * <p>Upper-casing uses {@link Locale#ROOT} (locale-neutral).
  *
  * <p><b>Default ({@link #toPattern(String)}):</b>
  * <ul>
  *   <li>If {@code value} already contains {@code %} or {@code _}, it is treated as a <em>raw</em>
- *       pattern (only trimmed + upper-cased) — you control the wildcards.</li>
+ *       pattern (only stripped + upper-cased) — you control the wildcards.</li>
  *   <li>Otherwise it becomes a contains match: {@code %VALUE%}.</li>
  * </ul>
  *
@@ -29,9 +33,9 @@ public final class LikePatterns {
      * @return upper-cased pattern, either raw (if wildcards present) or {@code %VALUE%}
      */
     public static String toPattern(String value) {
-        String trimmed = value.trim();
-        String upper = trimmed.toUpperCase();
-        return hasWildcard(trimmed) ? upper : "%" + upper + "%";
+        String stripped = Values.trimToEmpty(value);
+        String upper = stripped.toUpperCase(Locale.ROOT);
+        return hasWildcard(stripped) ? upper : "%" + upper + "%";
     }
 
     /**
@@ -52,7 +56,7 @@ public final class LikePatterns {
      * @return upper-cased escaped contains pattern, e.g. {@code %100\%%}
      */
     public static String containsEscaped(String value) {
-        return "%" + escapeWildcards(value.trim()).toUpperCase() + "%";
+        return "%" + escapeWildcards(Values.trimToEmpty(value)).toUpperCase(Locale.ROOT) + "%";
     }
 
     /**
@@ -62,7 +66,7 @@ public final class LikePatterns {
      * @return upper-cased escaped prefix pattern, e.g. {@code ADA%}
      */
     public static String startsWithEscaped(String value) {
-        return escapeWildcards(value.trim()).toUpperCase() + "%";
+        return escapeWildcards(Values.trimToEmpty(value)).toUpperCase(Locale.ROOT) + "%";
     }
 
     /**
@@ -72,7 +76,7 @@ public final class LikePatterns {
      * @return upper-cased escaped suffix pattern, e.g. {@code %ADA}
      */
     public static String endsWithEscaped(String value) {
-        return "%" + escapeWildcards(value.trim()).toUpperCase();
+        return "%" + escapeWildcards(Values.trimToEmpty(value)).toUpperCase(Locale.ROOT);
     }
 
     /**

@@ -1,5 +1,6 @@
 package dev.benjaminor.fluentquery.example;
 
+import dev.benjaminor.fluentquery.lifecycle.EnableFluentQueryLifecycle;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
@@ -10,8 +11,12 @@ import org.springframework.context.annotation.Bean;
 /**
  * Minimal demo application for spring-fluent-query (H2 + {@link DemoEntityRepository}).
  * On startup runs a full Create / Read / Update / Delete sample via {@link DemoCrudService}.
+ *
+ * <p>{@link EnableFluentQueryLifecycle} + {@code spring.fluent-query.lifecycle.enabled=true}
+ * wires optional Eloquent-style entity hooks ({@link DemoEntityLifecycle}).
  */
 @SpringBootApplication
+@EnableFluentQueryLifecycle
 public class FluentQueryExampleApplication {
 
     private static final Logger log = LoggerFactory.getLogger(FluentQueryExampleApplication.class);

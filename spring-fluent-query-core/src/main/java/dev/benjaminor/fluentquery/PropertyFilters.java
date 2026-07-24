@@ -64,7 +64,7 @@ public interface PropertyFilters<T> {
             if (!StringUtils.hasText(value)) {
                 return null;
             }
-            var join = Joins.reuseOrCreate(root, relation, JoinType.INNER);
+            var join = Joins.joinPath(root, relation, JoinType.INNER);
             return cb.like(likeExpression(join, cb, column), LikePatterns.toPattern(value));
         };
     }
@@ -129,7 +129,7 @@ public interface PropertyFilters<T> {
             if (value == null) {
                 return null;
             }
-            var join = Joins.reuseOrCreate(root, relation, JoinType.INNER);
+            var join = Joins.joinPath(root, relation, JoinType.INNER);
             return cb.equal(join.get(column), value);
         };
     }

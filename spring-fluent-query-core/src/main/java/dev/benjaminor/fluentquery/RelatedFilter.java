@@ -11,11 +11,11 @@ import jakarta.persistence.criteria.Predicate;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
-import java.util.ArrayList;
 import java.util.Collection;
-import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 
 /**
  * Small fluent builder for predicates on a related {@link From}/{@code Join}, typically used
@@ -25,20 +25,43 @@ import java.util.function.BiFunction;
  * <p>Strict methods always apply a predicate ({@code null} equality → {@code IS NULL}, same
  * semantics as {@link FluentQuery}). Optional methods skip when the value is blank/empty.
  * Nested {@code LIKE} respects {@link FluentQueryDefaults#likeMode()}.
+ * Supports {@code whereColumn}, {@code whereEqualIgnoreCase}, {@code orWhere*}, and {@code when}/{@code unless}.
+ * Nested attribute paths like {@code "a.b"} are <em>not</em> resolved here — use
+ * {@link FluentQuery#whereRelatedEqual}, {@link FluentQuery#whereRelation}, or
+ * {@link FluentQuery#whereHas} on the root builder.
+ *
+ * <p>Also used as the constraint builder for constrained eager loads
+ * ({@link FluentQuery#fetch(String, java.util.function.Consumer)} /
+ * {@link FluentQuery#fetchCollection(String, java.util.function.Consumer)}), where predicates
+ * become the leaf join {@code ON} clause (not a root {@code WHERE}).
  *
  * <p><b>Usage:</b>
  * <pre>{@code
  * authorRepository.query()
  *     .whereHas("books", f -> f.whereGt("pages", 100).whereLike("title", "Spring"))
  *     .get();
+ *
+ * authorRepository.query()
+ *     .fetchCollection("books", f -> f.whereGt("pages", 100))
+ *     .get();
  * }</pre>
  *
  * @see FluentQuery#whereHas(String, java.util.function.Consumer)
  * @see FluentQuery#whereDoesntHave(String, java.util.function.Consumer)
+ * @see FluentQuery#fetch(String, java.util.function.Consumer)
  */
 public final class RelatedFilter {
 
-    private final List<BiFunction<From<?, ?>, CriteriaBuilder, Predicate>> parts = new ArrayList<>();
+    private BiFunction<From<?, ?>, CriteriaBuilder, Predicate> tree = null;
+
+    /**
+     * {@code true} when no predicates were added.
+     *
+     * @return whether this filter is empty
+     */
+    public boolean isEmpty() {
+        return tree == null;
+    }
 
     /**
      * Strict equality. {@code null} → {@code IS NULL}.
@@ -63,9 +86,146 @@ public final class RelatedFilter {
         if (value == null) {
             return whereNull(column);
         }
-        Object normalized = value instanceof String s ? s.trim() : value;
-        parts.add((from, cb) -> cb.equal(from.get(column), normalized));
+        Object normalized = value instanceof String s ? Values.trimToEmpty(s) : value;
+        andPart((from, cb) -> cb.equal(from.get(column), normalized));
         return this;
+    }
+
+    /**
+     * Case-insensitive equality ({@code UPPER(col) = value}) with {@link Locale#ROOT}
+     * on the Java side. Intended for string columns only.
+     *
+     * @param column attribute name on the related entity
+     * @param value  expected value; {@code null} → {@link #whereNull(String)}
+     * @return {@code this} for chaining
+     */
+    public RelatedFilter whereEqualIgnoreCase(String column, String value) {
+        Objects.requireNonNull(column, "column");
+        if (value == null) {
+            return whereNull(column);
+        }
+        String normalized = Values.trimToNullUpper(value);
+        String upper = normalized == null ? "" : normalized;
+        return andPart((from, cb) -> cb.equal(cb.upper(from.get(column)), upper));
+    }
+
+    /**
+     * Case-insensitive equality only when {@code value} has text (blank → no-op).
+     *
+     * @param column attribute name
+     * @param value  expected value; blank → no-op
+     * @return {@code this} for chaining
+     */
+    public RelatedFilter optionalWhereEqualIgnoreCase(String column, String value) {
+        String normalized = Values.trimToNullUpper(value);
+        return normalized == null ? this : whereEqualIgnoreCase(column, normalized);
+    }
+
+    /**
+     * Column-to-column equality on the related entity ({@code left = right}).
+     *
+     * @param left  left attribute
+     * @param right right attribute
+     * @return {@code this} for chaining
+     */
+    public RelatedFilter whereColumn(String left, String right) {
+        return whereColumn(left, "=", right);
+    }
+
+    /**
+     * Column-to-column comparison. Operators: {@code =}, {@code !=}, {@code <>}, {@code >},
+     * {@code >=}, {@code <}, {@code <=}.
+     *
+     * @param left     left attribute
+     * @param operator comparison operator
+     * @param right    right attribute
+     * @return {@code this} for chaining
+     */
+    public RelatedFilter whereColumn(String left, String operator, String right) {
+        Objects.requireNonNull(left, "left");
+        Objects.requireNonNull(right, "right");
+        String op = normalizeColumnOperator(operator);
+        return andPart((from, cb) -> comparePaths(cb, from.get(left), from.get(right), op));
+    }
+
+    /**
+     * Runs {@code consumer} only when {@code condition} is {@code true}.
+     *
+     * @param condition when {@code false}, no-op
+     * @param consumer  mutations; {@code null} ignored
+     * @return {@code this} for chaining
+     */
+    public RelatedFilter when(boolean condition, Consumer<RelatedFilter> consumer) {
+        if (condition && consumer != null) {
+            consumer.accept(this);
+        }
+        return this;
+    }
+
+    /**
+     * Runs {@code consumer} only when {@code condition} is {@code false}.
+     *
+     * @param condition when {@code true}, no-op
+     * @param consumer  mutations; {@code null} ignored
+     * @return {@code this} for chaining
+     */
+    public RelatedFilter unless(boolean condition, Consumer<RelatedFilter> consumer) {
+        return when(!condition, consumer);
+    }
+
+    /**
+     * OR equality. {@code null} → {@code IS NULL}.
+     *
+     * @param column attribute name
+     * @param value  expected value
+     * @return {@code this} for chaining
+     */
+    public RelatedFilter orWhere(String column, Object value) {
+        Objects.requireNonNull(column, "column");
+        if (value == null) {
+            return orPart((from, cb) -> cb.isNull(from.get(column)));
+        }
+        Object normalized = value instanceof String s ? Values.trimToEmpty(s) : value;
+        return orPart((from, cb) -> cb.equal(from.get(column), normalized));
+    }
+
+    /**
+     * OR group: {@code orWhere(f -> f.where(...).where(...))} → {@code … OR (a AND b)}.
+     *
+     * @param group nested filter consumer
+     * @return {@code this} for chaining
+     */
+    public RelatedFilter orWhere(Consumer<RelatedFilter> group) {
+        if (group == null) {
+            return this;
+        }
+        RelatedFilter nested = new RelatedFilter();
+        group.accept(nested);
+        // Empty nested filter → conjunction (TRUE); OR TRUE would make the whole
+        // predicate always-true. Ignore like FluentQuery groups.
+        if (nested.isEmpty()) {
+            return this;
+        }
+        return orPart(nested::toPredicate);
+    }
+
+    /**
+     * AND group on the related entity.
+     *
+     * @param group nested filter consumer
+     * @return {@code this} for chaining
+     */
+    public RelatedFilter where(Consumer<RelatedFilter> group) {
+        if (group == null) {
+            return this;
+        }
+        RelatedFilter nested = new RelatedFilter();
+        group.accept(nested);
+        // Empty nested filter → conjunction (TRUE); skip no-op AND TRUE.
+        if (nested.isEmpty()) {
+            return this;
+        }
+        return andPart(nested::toPredicate);
     }
 
     /**
@@ -80,8 +240,8 @@ public final class RelatedFilter {
         if (value == null) {
             return whereNotNull(column);
         }
-        Object normalized = value instanceof String s ? s.trim() : value;
-        parts.add((from, cb) -> cb.notEqual(from.get(column), normalized));
+        Object normalized = value instanceof String s ? Values.trimToEmpty(s) : value;
+        andPart((from, cb) -> cb.notEqual(from.get(column), normalized));
         return this;
     }
 
@@ -100,7 +260,7 @@ public final class RelatedFilter {
         Objects.requireNonNull(value, "value");
         Values.requireText(value, "value must not be blank; use optionalWhereLike for search params");
         String pattern = LikePatterns.toPattern(value);
-        parts.add((from, cb) -> cb.like(LikeExpressions.of(from, cb, column), pattern));
+        andPart((from, cb) -> cb.like(LikeExpressions.of(from, cb, column), pattern));
         return this;
     }
 
@@ -118,7 +278,7 @@ public final class RelatedFilter {
         Objects.requireNonNull(value, "value");
         Values.requireText(value, "value must not be blank; use optionalWhereContains for search params");
         String pattern = LikePatterns.containsEscaped(value);
-        parts.add((from, cb) -> cb.like(LikeExpressions.of(from, cb, column), pattern, '\\'));
+        andPart((from, cb) -> cb.like(LikeExpressions.of(from, cb, column), pattern, '\\'));
         return this;
     }
 
@@ -136,7 +296,7 @@ public final class RelatedFilter {
         Objects.requireNonNull(value, "value");
         Values.requireText(value, "value must not be blank; use optionalWhereStartsWith for search params");
         String pattern = LikePatterns.startsWithEscaped(value);
-        parts.add((from, cb) -> cb.like(LikeExpressions.of(from, cb, column), pattern, '\\'));
+        andPart((from, cb) -> cb.like(LikeExpressions.of(from, cb, column), pattern, '\\'));
         return this;
     }
 
@@ -154,7 +314,7 @@ public final class RelatedFilter {
         Objects.requireNonNull(value, "value");
         Values.requireText(value, "value must not be blank; use optionalWhereEndsWith for search params");
         String pattern = LikePatterns.endsWithEscaped(value);
-        parts.add((from, cb) -> cb.like(LikeExpressions.of(from, cb, column), pattern, '\\'));
+        andPart((from, cb) -> cb.like(LikeExpressions.of(from, cb, column), pattern, '\\'));
         return this;
     }
 
@@ -171,8 +331,8 @@ public final class RelatedFilter {
         Objects.requireNonNull(column, "column");
         Objects.requireNonNull(pattern, "pattern");
         Values.requireText(pattern, "pattern must not be blank; use optionalWhereLikePattern for search params");
-        String upper = pattern.trim().toUpperCase();
-        parts.add((from, cb) -> cb.like(LikeExpressions.of(from, cb, column), upper));
+        String upper = Values.trimToEmpty(pattern).toUpperCase(java.util.Locale.ROOT);
+        andPart((from, cb) -> cb.like(LikeExpressions.of(from, cb, column), upper));
         return this;
     }
 
@@ -188,9 +348,9 @@ public final class RelatedFilter {
         Objects.requireNonNull(column, "column");
         Objects.requireNonNull(values, "values");
         if (values.isEmpty()) {
-            parts.add((from, cb) -> cb.disjunction());
+            andPart((from, cb) -> cb.disjunction());
         } else {
-            parts.add((from, cb) -> from.get(column).in(values));
+            andPart((from, cb) -> from.get(column).in(values));
         }
         return this;
     }
@@ -207,9 +367,9 @@ public final class RelatedFilter {
         Objects.requireNonNull(column, "column");
         Objects.requireNonNull(values, "values");
         if (values.isEmpty()) {
-            parts.add((from, cb) -> cb.conjunction());
+            andPart((from, cb) -> cb.conjunction());
         } else {
-            parts.add((from, cb) -> cb.not(from.get(column).in(values)));
+            andPart((from, cb) -> cb.not(from.get(column).in(values)));
         }
         return this;
     }
@@ -222,7 +382,7 @@ public final class RelatedFilter {
      */
     public RelatedFilter whereNull(String column) {
         Objects.requireNonNull(column, "column");
-        parts.add((from, cb) -> cb.isNull(from.get(column)));
+        andPart((from, cb) -> cb.isNull(from.get(column)));
         return this;
     }
 
@@ -234,7 +394,7 @@ public final class RelatedFilter {
      */
     public RelatedFilter whereNotNull(String column) {
         Objects.requireNonNull(column, "column");
-        parts.add((from, cb) -> cb.isNotNull(from.get(column)));
+        andPart((from, cb) -> cb.isNotNull(from.get(column)));
         return this;
     }
 
@@ -262,7 +422,7 @@ public final class RelatedFilter {
     public <Y extends Comparable<? super Y>> RelatedFilter whereGreaterThan(String column, Y value) {
         Objects.requireNonNull(column, "column");
         Objects.requireNonNull(value, "value");
-        parts.add((from, cb) -> cb.greaterThan(from.get(column), value));
+        andPart((from, cb) -> cb.greaterThan(from.get(column), value));
         return this;
     }
 
@@ -291,7 +451,7 @@ public final class RelatedFilter {
             String column, Y value) {
         Objects.requireNonNull(column, "column");
         Objects.requireNonNull(value, "value");
-        parts.add((from, cb) -> cb.greaterThanOrEqualTo(from.get(column), value));
+        andPart((from, cb) -> cb.greaterThanOrEqualTo(from.get(column), value));
         return this;
     }
 
@@ -319,7 +479,7 @@ public final class RelatedFilter {
     public <Y extends Comparable<? super Y>> RelatedFilter whereLessThan(String column, Y value) {
         Objects.requireNonNull(column, "column");
         Objects.requireNonNull(value, "value");
-        parts.add((from, cb) -> cb.lessThan(from.get(column), value));
+        andPart((from, cb) -> cb.lessThan(from.get(column), value));
         return this;
     }
 
@@ -348,7 +508,7 @@ public final class RelatedFilter {
             String column, Y value) {
         Objects.requireNonNull(column, "column");
         Objects.requireNonNull(value, "value");
-        parts.add((from, cb) -> cb.lessThanOrEqualTo(from.get(column), value));
+        andPart((from, cb) -> cb.lessThanOrEqualTo(from.get(column), value));
         return this;
     }
 
@@ -367,7 +527,7 @@ public final class RelatedFilter {
         if (from == null && to == null) {
             throw new IllegalArgumentException("whereBetween: from and to cannot both be null");
         }
-        parts.add((pathFrom, cb) -> {
+        andPart((pathFrom, cb) -> {
             var path = pathFrom.<Y>get(column);
             if (from != null && to != null) {
                 return cb.between(path, from, to);
@@ -393,7 +553,7 @@ public final class RelatedFilter {
         Objects.requireNonNull(column, "column");
         Objects.requireNonNull(from, "from");
         Objects.requireNonNull(to, "to");
-        parts.add((pathFrom, cb) -> cb.not(cb.between(pathFrom.<Y>get(column), from, to)));
+        andPart((pathFrom, cb) -> cb.not(cb.between(pathFrom.<Y>get(column), from, to)));
         return this;
     }
 
@@ -408,7 +568,7 @@ public final class RelatedFilter {
     public RelatedFilter whereDate(String column, LocalDate date) {
         Objects.requireNonNull(column, "column");
         Objects.requireNonNull(date, "date");
-        parts.add((from, cb) -> {
+        andPart((from, cb) -> {
             Path<?> path = from.get(column);
             return cb.and(
                     cb.equal(datePart(cb, path, "year"), date.getYear()),
@@ -427,7 +587,7 @@ public final class RelatedFilter {
      */
     public RelatedFilter whereYear(String column, int year) {
         Objects.requireNonNull(column, "column");
-        parts.add((from, cb) -> cb.equal(datePart(cb, from.get(column), "year"), year));
+        andPart((from, cb) -> cb.equal(datePart(cb, from.get(column), "year"), year));
         return this;
     }
 
@@ -444,7 +604,7 @@ public final class RelatedFilter {
         if (month < 1 || month > 12) {
             throw new IllegalArgumentException("month must be between 1 and 12");
         }
-        parts.add((from, cb) -> cb.equal(datePart(cb, from.get(column), "month"), month));
+        andPart((from, cb) -> cb.equal(datePart(cb, from.get(column), "month"), month));
         return this;
     }
 
@@ -461,7 +621,7 @@ public final class RelatedFilter {
         if (day < 1 || day > 31) {
             throw new IllegalArgumentException("day must be between 1 and 31");
         }
-        parts.add((from, cb) -> cb.equal(datePart(cb, from.get(column), "day"), day));
+        andPart((from, cb) -> cb.equal(datePart(cb, from.get(column), "day"), day));
         return this;
     }
 
@@ -475,7 +635,7 @@ public final class RelatedFilter {
     public RelatedFilter whereTime(String column, LocalTime time) {
         Objects.requireNonNull(column, "column");
         Objects.requireNonNull(time, "time");
-        parts.add((from, cb) -> {
+        andPart((from, cb) -> {
             Path<?> path = from.get(column);
             return cb.and(
                     cb.equal(datePart(cb, path, "hour"), time.getHour()),
@@ -798,18 +958,62 @@ public final class RelatedFilter {
     public Predicate toPredicate(From<?, ?> from, CriteriaBuilder cb) {
         Objects.requireNonNull(from, "from");
         Objects.requireNonNull(cb, "cb");
-        if (parts.isEmpty()) {
-            return cb.conjunction();
+        return tree == null ? cb.conjunction() : tree.apply(from, cb);
+    }
+
+    private RelatedFilter andPart(BiFunction<From<?, ?>, CriteriaBuilder, Predicate> part) {
+        Objects.requireNonNull(part, "part");
+        if (tree == null) {
+            tree = part;
+        } else {
+            BiFunction<From<?, ?>, CriteriaBuilder, Predicate> left = tree;
+            tree = (from, cb) -> cb.and(left.apply(from, cb), part.apply(from, cb));
         }
-        Predicate[] predicates = new Predicate[parts.size()];
-        for (int i = 0; i < parts.size(); i++) {
-            predicates[i] = parts.get(i).apply(from, cb);
+        return this;
+    }
+
+    private RelatedFilter orPart(BiFunction<From<?, ?>, CriteriaBuilder, Predicate> part) {
+        Objects.requireNonNull(part, "part");
+        if (tree == null) {
+            tree = part;
+        } else {
+            BiFunction<From<?, ?>, CriteriaBuilder, Predicate> left = tree;
+            tree = (from, cb) -> cb.or(left.apply(from, cb), part.apply(from, cb));
         }
-        return cb.and(predicates);
+        return this;
     }
 
     private static Expression<Integer> datePart(CriteriaBuilder cb, Path<?> path, String function) {
         return cb.function(function, Integer.class, path);
+    }
+
+    private static String normalizeColumnOperator(String operator) {
+        Objects.requireNonNull(operator, "operator");
+        String op = operator.trim();
+        if ("<>".equals(op)) {
+            op = "!=";
+        }
+        return switch (op) {
+            case "=", "!=", ">", ">=", "<", "<=" -> op;
+            default -> throw new IllegalArgumentException(
+                    "Invalid column comparison operator: " + operator
+                            + " (supported: =, !=, <>, >, >=, <, <=)");
+        };
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static Predicate comparePaths(
+            CriteriaBuilder cb, Path<?> left, Path<?> right, String operator) {
+        return switch (operator) {
+            case "=" -> cb.equal(left, right);
+            case "!=" -> cb.notEqual(left, right);
+            case ">" -> cb.greaterThan((Expression) left, (Expression) right);
+            case ">=" -> cb.greaterThanOrEqualTo((Expression) left, (Expression) right);
+            case "<" -> cb.lessThan((Expression) left, (Expression) right);
+            case "<=" -> cb.lessThanOrEqualTo((Expression) left, (Expression) right);
+            default -> throw new IllegalArgumentException(
+                    "Invalid column comparison operator: " + operator);
+        };
     }
 
     private static Object normalizeEqualValue(Object value) {

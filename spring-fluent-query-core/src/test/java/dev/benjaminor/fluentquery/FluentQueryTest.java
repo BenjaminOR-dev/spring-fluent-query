@@ -158,4 +158,143 @@ class FluentQueryTest {
         FluentQuery<Object> base = FluentQuery.of(executor);
         assertThat(base.optionalOrWhereLike("name", "  ")).isSameAs(base);
     }
+
+    @Test
+    void fetchCollection_withLimit_isRejected() {
+        @SuppressWarnings("unchecked")
+        JpaSpecificationExecutor<Object> executor = mock(JpaSpecificationExecutor.class);
+
+        assertThatThrownBy(() -> FluentQuery.of(executor)
+                        .fetchCollection("items")
+                        .limit(10))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("limit");
+    }
+
+    @Test
+    void fetch_withColumnShorthand_isRejected() {
+        @SuppressWarnings("unchecked")
+        JpaSpecificationExecutor<Object> executor = mock(JpaSpecificationExecutor.class);
+
+        assertThatThrownBy(() -> FluentQuery.of(executor).fetch("status:id,name"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("select");
+    }
+
+    @Test
+    void group_rejectsNestedFetch() {
+        @SuppressWarnings("unchecked")
+        JpaSpecificationExecutor<Object> executor = mock(JpaSpecificationExecutor.class);
+
+        assertThatThrownBy(() -> FluentQuery.of(executor)
+                        .where(q -> q.fetch("profile").where("active", true)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("groups");
+    }
+
+    @Test
+    void with_requiresConstraintsConsumer() {
+        @SuppressWarnings("unchecked")
+        JpaSpecificationExecutor<Object> executor = mock(JpaSpecificationExecutor.class);
+
+        assertThatThrownBy(() -> FluentQuery.of(executor).fetch("profile", null))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
+    void fetch_FetchRel_batchMixesPlainAndConstrained() {
+        @SuppressWarnings("unchecked")
+        JpaSpecificationExecutor<Object> executor = mock(JpaSpecificationExecutor.class);
+
+        FluentQuery<Object> q = FluentQuery.of(executor).fetch(
+                FetchRel.of("rel1.rel2", f -> f.where("active", true)),
+                FetchRel.of("rel3"),
+                FetchRel.of("rel4", f -> f.whereNotNull("code")));
+        assertThat(q).isNotNull();
+    }
+
+    @Test
+    void fetch_FetchRel_rejectsEmpty() {
+        @SuppressWarnings("unchecked")
+        JpaSpecificationExecutor<Object> executor = mock(JpaSpecificationExecutor.class);
+
+        assertThatThrownBy(() -> FluentQuery.of(executor).fetch(new FetchRel[0]))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void fetch_FetchRel_rejectsColon() {
+        assertThatThrownBy(() -> FetchRel.of("status:id,name"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(":");
+    }
+
+    @Test
+    void fetch_FetchRel_rejectsBlankPath() {
+        assertThatThrownBy(() -> FetchRel.of("  "))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("blank");
+        assertThatThrownBy(() -> FetchRel.of("\u00A0"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("blank");
+    }
+
+    @Test
+    void firstAs_rejectsWhenFetchConfigured() {
+        @SuppressWarnings("unchecked")
+        JpaSpecificationExecutor<Object> executor = mock(JpaSpecificationExecutor.class);
+
+        assertThatThrownBy(() -> FluentQuery.of(executor)
+                        .fetch("profile")
+                        .firstAs(Object.class))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("firstAs");
+    }
+
+    @Test
+    void getAs_rejectsWhenFetchCollectionConfigured() {
+        @SuppressWarnings("unchecked")
+        JpaSpecificationExecutor<Object> executor = mock(JpaSpecificationExecutor.class);
+
+        assertThatThrownBy(() -> FluentQuery.of(executor)
+                        .fetchCollection("books")
+                        .getAs(Object.class))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("getAs");
+    }
+
+    @Test
+    void pageAs_rejectsWhenFetchConfigured() {
+        @SuppressWarnings("unchecked")
+        JpaSpecificationExecutor<Object> executor = mock(JpaSpecificationExecutor.class);
+
+        assertThatThrownBy(() -> FluentQuery.of(executor)
+                        .fetch("profile")
+                        .pageAs(Object.class, PageRequest.of(0, 10)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("pageAs");
+    }
+
+    @Test
+    void fetch_and_fetchCollection_samePath_rejected() {
+        @SuppressWarnings("unchecked")
+        JpaSpecificationExecutor<Object> executor = mock(JpaSpecificationExecutor.class);
+
+        assertThatThrownBy(() -> FluentQuery.of(executor)
+                        .fetch("items")
+                        .fetchCollection("items"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("both");
+    }
+
+    @Test
+    void plainFetch_clearsPriorOnConstraint() {
+        @SuppressWarnings("unchecked")
+        JpaSpecificationExecutor<Object> executor = mock(JpaSpecificationExecutor.class);
+
+        FluentQuery<Object> q = FluentQuery.of(executor)
+                .fetch("profile", f -> f.where("active", true))
+                .fetch("profile");
+        assertThat(q).isNotNull();
+    }
 }

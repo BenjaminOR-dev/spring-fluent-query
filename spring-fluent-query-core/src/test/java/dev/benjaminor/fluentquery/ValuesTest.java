@@ -14,6 +14,8 @@ class ValuesTest {
         assertThat(dev.benjaminor.fluentquery.support.Values.hasText("a")).isTrue();
         assertThat(dev.benjaminor.fluentquery.support.Values.trimToNull("  x  ")).isEqualTo("x");
         assertThat(dev.benjaminor.fluentquery.support.Values.trimToNull("   ")).isNull();
+        assertThat(dev.benjaminor.fluentquery.support.Values.isBlank("\u00A0")).isTrue();
+        assertThat(dev.benjaminor.fluentquery.support.Values.trimToNull("\u00A0")).isNull();
     }
 
     @Test

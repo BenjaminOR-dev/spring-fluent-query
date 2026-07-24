@@ -1,8 +1,10 @@
 package dev.benjaminor.fluentquery;
 
+import dev.benjaminor.fluentquery.support.Fetches;
 import dev.benjaminor.fluentquery.support.Joins;
 import dev.benjaminor.fluentquery.support.LikeExpressions;
 import dev.benjaminor.fluentquery.support.LikePatterns;
+import dev.benjaminor.fluentquery.support.SelectPaths;
 import dev.benjaminor.fluentquery.support.Values;
 import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.Expression;
@@ -47,13 +49,15 @@ import java.util.stream.Stream;
  * <pre>{@code
  * userRepository.query()
  *     .where("email", email)
- *     .fetch("company")          // to-one: OK with page
- *     .latest("createdAt");      // LIMIT 1, no COUNT
+ *     .fetch("company")                    // to-one: OK with page
+ *     .fetch("profile.address")            // nested to-one path
+ *     .latest("createdAt");                // LIMIT 1, no COUNT
  * }</pre>
  *
  * <p><b>Performance rules:</b>
  * <ul>
- *   <li>{@link #fetch(String...)} — <b>to-one</b> associations ({@code @ManyToOne}/{@code @OneToOne})</li>
+ *   <li>{@link #fetch(String...)} — <b>to-one</b> associations ({@code @ManyToOne}/{@code @OneToOne}),
+ *       including dotted paths ({@code "a.b.c"}); intermediate fetches are reused</li>
  *   <li>{@link #fetchCollection(String...)} — to-many; <b>forbidden</b> with {@link #page(Pageable)}</li>
  *   <li>{@link #get()} without {@link #limit(int)} may load the whole table — prefer limit/page/slice</li>
  * </ul>
@@ -73,8 +77,16 @@ public final class FluentQuery<T> {
     private boolean distinct = false;
     private final List<String> fetchToOne = new ArrayList<>();
     private final List<String> fetchCollections = new ArrayList<>();
+    /**
+     * Eloquent-style {@code ON} constraints for eager loads ({@link #with}/{@link #withCollection}).
+     * Key = association path; applied on the leaf join of that path.
+     */
+    private final java.util.Map<String, Consumer<RelatedFilter>> fetchOnConstraints =
+            new java.util.LinkedHashMap<>();
     /** Property paths for Spring Data {@code project(...)} (Eloquent-style {@code select}). */
     private final List<String> selectColumns = new ArrayList<>();
+    /** Set after a terminal executes; builder must not be reused. */
+    private boolean consumed = false;
 
     private FluentQuery(JpaSpecificationExecutor<T> executor, PropertyFilters<T> filters) {
         this.executor = Objects.requireNonNull(executor, "executor");
@@ -118,6 +130,7 @@ public final class FluentQuery<T> {
      * @return {@code this} for chaining
      */
     public FluentQuery<T> where(Specification<T> specification) {
+        ensureOpen();
         if (specification == null) {
             return this;
         }
@@ -246,6 +259,7 @@ public final class FluentQuery<T> {
      * @return {@code this} for chaining
      */
     public FluentQuery<T> orWhere(Specification<T> specification) {
+        ensureOpen();
         if (specification == null) {
             return this;
         }
@@ -264,7 +278,7 @@ public final class FluentQuery<T> {
         if (value == null) {
             return orWhere((root, query, cb) -> cb.isNull(root.get(column)));
         }
-        Object normalized = value instanceof String s ? s.trim() : value;
+        Object normalized = value instanceof String s ? Values.trimToEmpty(s) : value;
         return orWhere(strictEqualSpec(column, normalized));
     }
 
@@ -277,6 +291,97 @@ public final class FluentQuery<T> {
     public FluentQuery<T> orWhere(Consumer<FluentQuery<T>> group) {
         Specification<T> nested = buildGroupSpec(group);
         return nested == null ? this : orWhere(nested);
+    }
+
+
+    /**
+     * Strict OR {@code LIKE} (non-blank). Same pattern rules as {@link #whereLike(String, String)}.
+     *
+     * @param column attribute name
+     * @param value  substring or pattern; must not be blank
+     * @return {@code this} for chaining
+     * @see #optionalOrWhereLike(String, String)
+     */
+    public FluentQuery<T> orWhereLike(String column, String value) {
+        Objects.requireNonNull(value, "value");
+        Values.requireText(value, "value must not be blank; use optionalOrWhereLike for search params");
+        return orWhere(likeSpec(column, value));
+    }
+
+    /**
+     * Strict OR escaped contains {@code LIKE}.
+     *
+     * @param column attribute name
+     * @param value  free-text substring; must not be blank
+     * @return {@code this} for chaining
+     */
+    public FluentQuery<T> orWhereContains(String column, String value) {
+        Objects.requireNonNull(value, "value");
+        Values.requireText(value, "value must not be blank; use optionalWhereContains for search params");
+        return orWhere(likeEscapedSpec(column, LikePatterns.containsEscaped(value)));
+    }
+
+    /**
+     * Strict OR escaped prefix {@code LIKE}.
+     *
+     * @param column attribute name
+     * @param value  prefix; must not be blank
+     * @return {@code this} for chaining
+     */
+    public FluentQuery<T> orWhereStartsWith(String column, String value) {
+        Objects.requireNonNull(value, "value");
+        Values.requireText(value, "value must not be blank; use optionalWhereStartsWith for search params");
+        return orWhere(likeEscapedSpec(column, LikePatterns.startsWithEscaped(value)));
+    }
+
+    /**
+     * Strict OR escaped suffix {@code LIKE}.
+     *
+     * @param column attribute name
+     * @param value  suffix; must not be blank
+     * @return {@code this} for chaining
+     */
+    public FluentQuery<T> orWhereEndsWith(String column, String value) {
+        Objects.requireNonNull(value, "value");
+        Values.requireText(value, "value must not be blank; use optionalWhereEndsWith for search params");
+        return orWhere(likeEscapedSpec(column, LikePatterns.endsWithEscaped(value)));
+    }
+
+    /**
+     * Strict OR raw {@code LIKE} pattern (stripped + upper-cased with {@link java.util.Locale#ROOT}).
+     *
+     * @param column  attribute name
+     * @param pattern raw pattern; must not be blank
+     * @return {@code this} for chaining
+     */
+    public FluentQuery<T> orWhereLikePattern(String column, String pattern) {
+        Objects.requireNonNull(pattern, "pattern");
+        Values.requireText(pattern, "pattern must not be blank; use optionalWhereLikePattern for search params");
+        return orWhere(likeRawSpec(column, Values.trimToEmpty(pattern).toUpperCase(java.util.Locale.ROOT)));
+    }
+
+    /**
+     * Strict OR {@code IN}. Empty collection → never-matches ({@code disjunction}).
+     *
+     * @param column attribute name
+     * @param values allowed values; must not be {@code null}
+     * @return {@code this} for chaining
+     */
+    public FluentQuery<T> orWhereIn(String column, Collection<?> values) {
+        Objects.requireNonNull(values, "values");
+        return orWhere(inSpec(column, values));
+    }
+
+    /**
+     * Strict OR {@code NOT IN}. Empty collection → always-true ({@code conjunction}).
+     *
+     * @param column attribute name
+     * @param values forbidden values; must not be {@code null}
+     * @return {@code this} for chaining
+     */
+    public FluentQuery<T> orWhereNotIn(String column, Collection<?> values) {
+        Objects.requireNonNull(values, "values");
+        return orWhere(notInSpec(column, values));
     }
 
     /**
@@ -303,8 +408,28 @@ public final class FluentQuery<T> {
         if (value == null) {
             return whereNull(column);
         }
-        Object normalized = value instanceof String s ? s.trim() : value;
+        Object normalized = value instanceof String s ? Values.trimToEmpty(s) : value;
         return where(strictEqualSpec(column, normalized));
+    }
+
+    /**
+     * Case-insensitive equality on a string column ({@code UPPER(col) = UPPER(value)}),
+     * using {@link java.util.Locale#ROOT} for the Java-side normalisation (DB {@code UPPER}
+     * remains vendor-defined). {@code null} → {@link #whereNull(String)}.
+     *
+     * @param column attribute name
+     * @param value  expected value; blank after trim → equal to blank / empty after UPPER
+     * @return {@code this} for chaining
+     * @see #optionalWhereEqualIgnoreCase(String, String)
+     */
+    public FluentQuery<T> whereEqualIgnoreCase(String column, String value) {
+        Objects.requireNonNull(column, "column");
+        Values.requireText(column, "column must not be blank (string attribute only)");
+        if (value == null) {
+            return whereNull(column);
+        }
+        String normalized = Values.trimToNullUpper(value);
+        return where(equalIgnoreCaseSpec(column, normalized == null ? "" : normalized));
     }
 
     /**
@@ -330,29 +455,33 @@ public final class FluentQuery<T> {
         if (value == null) {
             return whereNotNull(column);
         }
-        Object normalized = value instanceof String s ? s.trim() : value;
+        Object normalized = value instanceof String s ? Values.trimToEmpty(s) : value;
         return where(strictNotEqualSpec(column, normalized));
     }
 
     /**
      * Equality on a related entity attribute via INNER JOIN.
-     * {@code null} → {@code related.column IS NULL}.
+     * {@code null} → {@code related.column IS NULL} on rows where the association
+     * <em>exists</em> (INNER). Missing associations are excluded — use
+     * {@link #whereDoesntHave(String)} / {@link #whereHas(String)} for presence, not dotted
+     * {@code where("a.b", v)} (unsupported by design).
      *
-     * @param relation association name from the root
+     * @param relation association name or dotted path from the root
      * @param column   attribute on the related entity
      * @param value    expected value; {@code null} means {@code IS NULL} on the join path
      * @return {@code this} for chaining
+     * @see #whereRelation(String, String, Object)
      */
     public FluentQuery<T> whereRelatedEqual(String relation, String column, Object value) {
         if (value == null) {
             return where((root, query, cb) -> {
-                Join<?, ?> join = Joins.reuseOrCreate(root, relation, JoinType.INNER);
+                Join<?, ?> join = Joins.joinPath(root, relation, JoinType.INNER);
                 return cb.isNull(join.get(column));
             });
         }
-        Object normalized = value instanceof String s ? s.trim() : value;
+        Object normalized = value instanceof String s ? Values.trimToEmpty(s) : value;
         return where((root, query, cb) -> {
-            Join<?, ?> join = Joins.reuseOrCreate(root, relation, JoinType.INNER);
+            Join<?, ?> join = Joins.joinPath(root, relation, JoinType.INNER);
             return cb.equal(join.get(column), normalized);
         });
     }
@@ -443,7 +572,7 @@ public final class FluentQuery<T> {
     public FluentQuery<T> whereLikePattern(String column, String pattern) {
         Objects.requireNonNull(pattern, "pattern");
         Values.requireText(pattern, "pattern must not be blank; use optionalWhereLikePattern for search params");
-        return where(likeRawSpec(column, pattern.trim().toUpperCase()));
+        return where(likeRawSpec(column, Values.trimToEmpty(pattern).toUpperCase(java.util.Locale.ROOT)));
     }
 
     /**
@@ -839,6 +968,21 @@ public final class FluentQuery<T> {
     }
 
     /**
+     * Case-insensitive equality only when {@code value} has text after trim
+     * ({@code null} / blank → no-op). Uses {@link java.util.Locale#ROOT} on the
+     * Java side; DB {@code UPPER} is vendor-defined.
+     *
+     * @param column attribute name
+     * @param value  expected value; blank → no-op
+     * @return {@code this} for chaining
+     * @see #whereEqualIgnoreCase(String, String)
+     */
+    public FluentQuery<T> optionalWhereEqualIgnoreCase(String column, String value) {
+        String normalized = Values.trimToNullUpper(value);
+        return normalized == null ? this : where(equalIgnoreCaseSpec(column, normalized));
+    }
+
+    /**
      * OR equality only when a value is present ({@code null} / blank → no-op).
      *
      * @param column attribute name
@@ -927,7 +1071,7 @@ public final class FluentQuery<T> {
             return this;
         }
         return where((root, query, cb) -> {
-            Join<?, ?> join = Joins.reuseOrCreate(root, relation, JoinType.INNER);
+            Join<?, ?> join = Joins.joinPath(root, relation, JoinType.INNER);
             return cb.equal(join.get(column), normalized);
         });
     }
@@ -1222,13 +1366,17 @@ public final class FluentQuery<T> {
 
     /**
      * Related association exists (collection → {@code IS NOT EMPTY}; to-one → {@code IS NOT NULL}).
+     * Supports dotted paths ({@code "company.address"}) via {@code EXISTS} + joins.
      *
-     * @param relation association name on the root entity
+     * @param relation association name or dotted path on the root entity
      * @return {@code this} for chaining
      * @throws NullPointerException if {@code relation} is {@code null}
      */
     public FluentQuery<T> whereHas(String relation) {
         Objects.requireNonNull(relation, "relation");
+        if (Joins.isNestedPath(relation)) {
+            return where(existsPathSpec(relation, false));
+        }
         if (filters != null) {
             return where(filters.hasRelation(relation));
         }
@@ -1237,15 +1385,22 @@ public final class FluentQuery<T> {
 
     /**
      * Related rows exist matching nested predicates ({@code EXISTS} correlated subquery).
+     * Supports dotted paths; predicates apply to the <em>leaf</em> association.
      *
      * <pre>{@code
+     * // single hop
      * authorRepository.query()
      *     .whereHas("books", f -> f.whereGt("pages", 100))
      *     .get();
+     *
+     * // nested path (equivalent to whereHas("company", f -> f.whereHas(...)))
+     * authorRepository.query()
+     *     .whereHas("company.address", f -> f.where("city", "Austin"))
+     *     .get();
      * }</pre>
      *
-     * @param relation association name on the root entity
-     * @param nested   consumer that configures a {@link RelatedFilter} on the join
+     * @param relation association name or dotted path on the root entity
+     * @param nested   consumer that configures a {@link RelatedFilter} on the leaf join
      * @return {@code this} for chaining
      * @throws NullPointerException if {@code relation} or {@code nested} is {@code null}
      * @see RelatedFilter
@@ -1256,13 +1411,17 @@ public final class FluentQuery<T> {
 
     /**
      * Related association absent (collection → {@code IS EMPTY}; to-one → {@code IS NULL}).
+     * Supports dotted paths via {@code NOT EXISTS} + joins.
      *
-     * @param relation association name on the root entity
+     * @param relation association name or dotted path on the root entity
      * @return {@code this} for chaining
      * @throws NullPointerException if {@code relation} is {@code null}
      */
     public FluentQuery<T> whereDoesntHave(String relation) {
         Objects.requireNonNull(relation, "relation");
+        if (Joins.isNestedPath(relation)) {
+            return where(existsPathSpec(relation, true));
+        }
         if (filters != null) {
             return where(filters.hasNoRelation(relation));
         }
@@ -1285,11 +1444,14 @@ public final class FluentQuery<T> {
     /**
      * OR of {@link #whereHas(String)}.
      *
-     * @param relation association name on the root entity
+     * @param relation association name or dotted path on the root entity
      * @return {@code this} for chaining
      */
     public FluentQuery<T> orWhereHas(String relation) {
         Objects.requireNonNull(relation, "relation");
+        if (Joins.isNestedPath(relation)) {
+            return orWhere(existsPathSpec(relation, false));
+        }
         if (filters != null) {
             return orWhere(filters.hasRelation(relation));
         }
@@ -1310,11 +1472,14 @@ public final class FluentQuery<T> {
     /**
      * OR of {@link #whereDoesntHave(String)}.
      *
-     * @param relation association name on the root entity
+     * @param relation association name or dotted path on the root entity
      * @return {@code this} for chaining
      */
     public FluentQuery<T> orWhereDoesntHave(String relation) {
         Objects.requireNonNull(relation, "relation");
+        if (Joins.isNestedPath(relation)) {
+            return orWhere(existsPathSpec(relation, true));
+        }
         if (filters != null) {
             return orWhere(filters.hasNoRelation(relation));
         }
@@ -1334,9 +1499,10 @@ public final class FluentQuery<T> {
 
     /**
      * Convenience for {@code whereHas(relation, f -> f.where(column, value))}.
+     * {@code relation} may be a dotted path; {@code column} is on the leaf entity.
      *
-     * @param relation association name on the root entity
-     * @param column   attribute on the related entity
+     * @param relation association name or dotted path on the root entity
+     * @param column   attribute on the related (leaf) entity
      * @param value    expected related value; {@code null} → {@code IS NULL} on the related column
      * @return {@code this} for chaining
      */
@@ -1708,6 +1874,29 @@ public final class FluentQuery<T> {
     }
 
     /**
+     * Type-safe {@link #optionalWhereEqualIgnoreCase(String, String)}.
+     *
+     * @param attribute metamodel attribute
+     * @param value     expected value; blank → no-op
+     * @return {@code this} for chaining
+     */
+    public FluentQuery<T> optionalWhereEqualIgnoreCase(
+            SingularAttribute<? super T, ?> attribute, String value) {
+        return optionalWhereEqualIgnoreCase(attrName(attribute), value);
+    }
+
+    /**
+     * Type-safe {@link #whereEqualIgnoreCase(String, String)}.
+     *
+     * @param attribute metamodel attribute
+     * @param value     expected value
+     * @return {@code this} for chaining
+     */
+    public FluentQuery<T> whereEqualIgnoreCase(SingularAttribute<? super T, ?> attribute, String value) {
+        return whereEqualIgnoreCase(attrName(attribute), value);
+    }
+
+    /**
      * Optional {@code LIKE} using a metamodel attribute (blank → no-op).
      *
      * @param attribute metamodel attribute on the root entity
@@ -2047,6 +2236,37 @@ public final class FluentQuery<T> {
     public FluentQuery<T> optionalOrWhereLike(SingularAttribute<? super T, ?> attribute, String value) {
         return optionalOrWhereLike(attrName(attribute), value);
     }
+
+    /**
+     * Type-safe {@link #orWhereLike(String, String)}.
+     */
+    public FluentQuery<T> orWhereLike(SingularAttribute<? super T, ?> attribute, String value) {
+        return orWhereLike(attrName(attribute), value);
+    }
+
+    /**
+     * Type-safe {@link #orWhereContains(String, String)}.
+     */
+    public FluentQuery<T> orWhereContains(SingularAttribute<? super T, ?> attribute, String value) {
+        return orWhereContains(attrName(attribute), value);
+    }
+
+    /**
+     * Type-safe {@link #orWhereIn(String, Collection)}.
+     */
+    public FluentQuery<T> orWhereIn(
+            SingularAttribute<? super T, ?> attribute, Collection<?> values) {
+        return orWhereIn(attrName(attribute), values);
+    }
+
+    /**
+     * Type-safe {@link #orWhereNotIn(String, Collection)}.
+     */
+    public FluentQuery<T> orWhereNotIn(
+            SingularAttribute<? super T, ?> attribute, Collection<?> values) {
+        return orWhereNotIn(attrName(attribute), values);
+    }
+
 
     /**
      * Optional OR {@code IN} using a metamodel attribute (empty → no-op).
@@ -2431,15 +2651,19 @@ public final class FluentQuery<T> {
      *       column trimming, use {@code select(...).getAs(YourProjection.class)}.</li>
      * </ul>
      *
-     * @param columns attribute names or simple property paths (e.g. {@code "email"});
+     * @param columns attribute names, property paths (e.g. {@code "email"}), or compact
+     *                association shorthand {@code "assoc:col1,col2"} → {@code assoc.col1},
+     *                {@code assoc.col2} (also nested: {@code "a.b:c,d"});
      *                at least one required; blank names rejected
      * @return {@code this} for chaining
      * @throws NullPointerException     if {@code columns} or an element is {@code null}
-     * @throws IllegalArgumentException if {@code columns} is empty or an element is blank
+     * @throws IllegalArgumentException if {@code columns} is empty or an element is blank/malformed
      * @see #select(java.util.Collection)
      * @see #firstAs(Class)
+     * @see SelectPaths
      */
     public FluentQuery<T> select(String... columns) {
+        ensureOpen();
         Objects.requireNonNull(columns, "columns");
         if (columns.length == 0) {
             throw new IllegalArgumentException("select requires at least one column");
@@ -2447,9 +2671,10 @@ public final class FluentQuery<T> {
         for (String column : columns) {
             Objects.requireNonNull(column, "column");
             Values.requireText(column, "select column must not be blank");
-            String name = column.trim();
-            if (!selectColumns.contains(name)) {
-                selectColumns.add(name);
+            for (String name : SelectPaths.expand(column)) {
+                if (!selectColumns.contains(name)) {
+                    selectColumns.add(name);
+                }
             }
         }
         return this;
@@ -2494,13 +2719,20 @@ public final class FluentQuery<T> {
 
     /**
      * LEFT JOIN FETCH of <b>to-one</b> associations ({@code @ManyToOne}/{@code @OneToOne}).
+     * Supports dotted paths ({@code "profile.address"}); intermediate fetches are reused.
      * Safe with {@link #page(Pageable)}. Enables DISTINCT. Not applied on count/exists.
      *
-     * @param associations to-one association names
+     * <p><b>Not</b> a column list: {@code "status:id,name"} is rejected. JPA loads the full
+     * managed association; for lean columns use
+     * {@code select("status:id,name").getAs(Projection.class)} instead.
+     *
+     * @param associations to-one association names or dotted paths
      * @return {@code this} for chaining
+     * @throws IllegalArgumentException if a token contains {@code ':'} (select shorthand)
      */
     public FluentQuery<T> fetch(String... associations) {
-        addFetches(fetchToOne, associations);
+        ensureOpen();
+        addFetches(fetchToOne, fetchCollections, associations);
         if (!fetchToOne.isEmpty() || !fetchCollections.isEmpty()) {
             this.distinct = true;
         }
@@ -2508,19 +2740,284 @@ public final class FluentQuery<T> {
     }
 
     /**
+     * Constrained to-one eager load (Eloquent {@code with} + closure): {@code LEFT JOIN FETCH}
+     * with related predicates on the leaf join {@code ON} clause.
+     *
+     * <pre>{@code
+     * query().fetch("profile", f -> f.where("active", true)).first();
+     * query().fetch("company.address", f -> f.whereNotNull("city"));
+     * }</pre>
+     *
+     * @param association to-one path (may be dotted; constraints apply to the leaf)
+     * @param constraints related predicates; must not be {@code null}
+     * @return {@code this} for chaining
+     * @throws NullPointerException if {@code constraints} is {@code null}
+     * @see #with(String, Consumer)
+     */
+    public FluentQuery<T> fetch(String association, Consumer<RelatedFilter> constraints) {
+        Objects.requireNonNull(constraints, "constraints");
+        Values.requireText(association, "association must not be blank");
+        String path = association.trim();
+        fetch(path);
+        fetchOnConstraints.put(path, constraints);
+        return this;
+    }
+
+    /**
+     * Batch to-one eager loads mixing plain and constrained entries — Java form of Eloquent
+     * {@code with(['a.b' => fn, 'c', 'd' => fn])}.
+     *
+     * <pre>{@code
+     * query().fetch(
+     *     FetchRel.of("rel1.rel2", f -> f.where("active", true)),
+     *     FetchRel.of("rel3"),
+     *     FetchRel.of("rel4", f -> f.whereNotNull("code"))
+     * ).first();
+     * }</pre>
+     *
+     * @param relations one or more {@link FetchRel} specs
+     * @return {@code this} for chaining
+     * @throws NullPointerException     if {@code relations} or an element is {@code null}
+     * @throws IllegalArgumentException if empty
+     * @see FetchRel
+     * @see #with(FetchRel...)
+     */
+    public FluentQuery<T> fetch(FetchRel... relations) {
+        ensureOpen();
+        Objects.requireNonNull(relations, "relations");
+        if (relations.length == 0) {
+            throw new IllegalArgumentException("fetch requires at least one FetchRel");
+        }
+        for (FetchRel rel : relations) {
+            Objects.requireNonNull(rel, "relation");
+            if (rel.constrained()) {
+                fetch(rel.path(), rel.constraints());
+            } else {
+                fetch(rel.path());
+            }
+        }
+        return this;
+    }
+
+    /**
+     * Eloquent-style eager load for <b>to-one</b> associations (alias of {@link #fetch(String...)}).
+     *
+     * <pre>{@code
+     * query().with("profile", "company.address").first();
+     * }</pre>
+     *
+     * @param associations to-one paths
+     * @return {@code this} for chaining
+     * @see #fetch(String, Consumer)
+     * @see #withCollection(String, Consumer)
+     */
+    public FluentQuery<T> with(String... associations) {
+        return fetch(associations);
+    }
+
+    /**
+     * Alias of {@link #fetch(String, Consumer)} (Eloquent naming).
+     *
+     * @param association to-one path
+     * @param constraints related predicates; must not be {@code null}
+     * @return {@code this} for chaining
+     */
+    public FluentQuery<T> with(String association, Consumer<RelatedFilter> constraints) {
+        return fetch(association, constraints);
+    }
+
+    /**
+     * Alias of {@link #fetch(FetchRel...)}.
+     *
+     * @param relations fetch specs
+     * @return {@code this} for chaining
+     */
+    public FluentQuery<T> with(FetchRel... relations) {
+        return fetch(relations);
+    }
+
+    /**
+     * Batch Eloquent-style to-one {@code with}. A {@code null} consumer means plain fetch.
+     * Prefer {@link #fetch(FetchRel...)} when mixing plain and constrained paths (no nulls).
+     *
+     * <pre>{@code
+     * Map<String, Consumer<RelatedFilter>> rels = new LinkedHashMap<>();
+     * rels.put("profile", null);
+     * rels.put("company", f -> f.where("active", true));
+     * query().with(rels);
+     * }</pre>
+     *
+     * @param relations path → constraints ({@code null} value = unconstrained fetch)
+     * @return {@code this} for chaining
+     */
+    public FluentQuery<T> with(java.util.Map<String, ? extends Consumer<RelatedFilter>> relations) {
+        ensureOpen();
+        Objects.requireNonNull(relations, "relations");
+        for (var e : relations.entrySet()) {
+            if (e.getValue() == null) {
+                with(e.getKey());
+            } else {
+                with(e.getKey(), e.getValue());
+            }
+        }
+        return this;
+    }
+
+    /**
+     * Same as {@link #with(java.util.Map)} under the {@code fetch} name.
+     *
+     * @param relations path → constraints ({@code null} value = unconstrained fetch)
+     * @return {@code this} for chaining
+     */
+    public FluentQuery<T> fetch(java.util.Map<String, ? extends Consumer<RelatedFilter>> relations) {
+        return with(relations);
+    }
+
+    /**
      * LEFT JOIN FETCH of collections ({@code @OneToMany}/{@code @ManyToMany}).
-     * <b>Incompatible</b> with {@link #page(Pageable)} (cartesian product / wrong COUNT).
+     * <b>Incompatible</b> with {@link #page(Pageable)} and {@link #limit(int)}
+     * (cartesian product / wrong COUNT or LIMIT on the join product).
      * Use with {@link #get()} / {@link #first()}, or load collections in a second query.
+     *
+     * <p>{@link #first()} / {@link #one()} with a collection fetch skip SQL {@code LIMIT} and
+     * pick the first root in memory. Constrained collection fetch is a <em>partial</em> view —
+     * do not {@code save()} roots with {@code orphanRemoval} after filtering children.
+     *
+     * <p>Same rule as {@link #fetch}: no {@code "assoc:col1,col2"} shorthand — use {@link #select}.
      *
      * @param associations to-many association names
      * @return {@code this} for chaining
+     * @throws IllegalArgumentException if a token contains {@code ':'} (select shorthand)
      */
     public FluentQuery<T> fetchCollection(String... associations) {
-        addFetches(fetchCollections, associations);
+        ensureOpen();
+        addFetches(fetchCollections, fetchToOne, associations);
+        assertNoCollectionFetchWithLimit();
         if (!fetchToOne.isEmpty() || !fetchCollections.isEmpty()) {
             this.distinct = true;
         }
         return this;
+    }
+
+    /**
+     * Constrained collection eager load: {@code LEFT JOIN FETCH} + {@code ON} on the leaf
+     * (Eloquent {@code with(['books' => fn ($q) => ...])}). Same page/{@code limit} rules as
+     * {@link #fetchCollection(String...)}.
+     *
+     * <pre>{@code
+     * query().fetchCollection("books", f -> f.whereGt("pages", 100)).get();
+     * }</pre>
+     *
+     * @param association collection path (may be dotted)
+     * @param constraints related predicates; must not be {@code null}
+     * @return {@code this} for chaining
+     * @throws NullPointerException  if {@code constraints} is {@code null}
+     * @throws IllegalStateException if combined with {@link #page} / {@link #limit}
+     * @see #withCollection(String, Consumer)
+     */
+    public FluentQuery<T> fetchCollection(String association, Consumer<RelatedFilter> constraints) {
+        Objects.requireNonNull(constraints, "constraints");
+        Values.requireText(association, "association must not be blank");
+        String path = association.trim();
+        fetchCollection(path);
+        fetchOnConstraints.put(path, constraints);
+        return this;
+    }
+
+    /**
+     * Batch collection eager loads mixing plain and constrained entries.
+     *
+     * <pre>{@code
+     * query().fetchCollection(
+     *     FetchRel.of("books", f -> f.whereGt("pages", 100)),
+     *     FetchRel.of("tags")
+     * ).get();
+     * }</pre>
+     *
+     * @param relations one or more {@link FetchRel} specs
+     * @return {@code this} for chaining
+     * @see #withCollection(FetchRel...)
+     */
+    public FluentQuery<T> fetchCollection(FetchRel... relations) {
+        ensureOpen();
+        Objects.requireNonNull(relations, "relations");
+        if (relations.length == 0) {
+            throw new IllegalArgumentException("fetchCollection requires at least one FetchRel");
+        }
+        for (FetchRel rel : relations) {
+            Objects.requireNonNull(rel, "relation");
+            if (rel.constrained()) {
+                fetchCollection(rel.path(), rel.constraints());
+            } else {
+                fetchCollection(rel.path());
+            }
+        }
+        return this;
+    }
+
+    /**
+     * Eloquent-style eager load for <b>collections</b> (alias of {@link #fetchCollection(String...)}).
+     * Same pagination / {@code limit} rules as {@link #fetchCollection(String...)}.
+     *
+     * @param associations to-many paths
+     * @return {@code this} for chaining
+     * @see #fetchCollection(String, Consumer)
+     */
+    public FluentQuery<T> withCollection(String... associations) {
+        return fetchCollection(associations);
+    }
+
+    /**
+     * Alias of {@link #fetchCollection(String, Consumer)} (Eloquent naming).
+     *
+     * @param association collection path (may be dotted)
+     * @param constraints related predicates; must not be {@code null}
+     * @return {@code this} for chaining
+     */
+    public FluentQuery<T> withCollection(String association, Consumer<RelatedFilter> constraints) {
+        return fetchCollection(association, constraints);
+    }
+
+    /**
+     * Alias of {@link #fetchCollection(FetchRel...)}.
+     *
+     * @param relations fetch specs
+     * @return {@code this} for chaining
+     */
+    public FluentQuery<T> withCollection(FetchRel... relations) {
+        return fetchCollection(relations);
+    }
+
+    /**
+     * Batch collection {@code with} via map ({@code null} consumer = plain). Prefer
+     * {@link #fetchCollection(FetchRel...)} to avoid nulls.
+     *
+     * @param relations path → constraints
+     * @return {@code this} for chaining
+     */
+    public FluentQuery<T> withCollection(
+            java.util.Map<String, ? extends Consumer<RelatedFilter>> relations) {
+        ensureOpen();
+        Objects.requireNonNull(relations, "relations");
+        for (var e : relations.entrySet()) {
+            if (e.getValue() == null) {
+                withCollection(e.getKey());
+            } else {
+                withCollection(e.getKey(), e.getValue());
+            }
+        }
+        return this;
+    }
+
+    /**
+     * Same as {@link #withCollection(java.util.Map)} under the {@code fetchCollection} name.
+     *
+     * @param relations path → constraints
+     * @return {@code this} for chaining
+     */
+    public FluentQuery<T> fetchCollection(
+            java.util.Map<String, ? extends Consumer<RelatedFilter>> relations) {
+        return withCollection(relations);
     }
 
     /**
@@ -2529,6 +3026,7 @@ public final class FluentQuery<T> {
      * @return {@code this} for chaining
      */
     public FluentQuery<T> distinct() {
+        ensureOpen();
         this.distinct = true;
         return this;
     }
@@ -2542,10 +3040,12 @@ public final class FluentQuery<T> {
      * @throws IllegalArgumentException if {@code max <= 0}
      */
     public FluentQuery<T> limit(int max) {
+        ensureOpen();
         if (max <= 0) {
             throw new IllegalArgumentException("limit must be > 0");
         }
         this.limit = max;
+        assertNoCollectionFetchWithLimit();
         return this;
     }
 
@@ -2576,6 +3076,7 @@ public final class FluentQuery<T> {
      * @return {@code this} for chaining
      */
     public FluentQuery<T> orderBy(Sort sort) {
+        ensureOpen();
         if (sort == null || sort.isUnsorted()) {
             return this;
         }
@@ -2597,10 +3098,27 @@ public final class FluentQuery<T> {
     /**
      * First row ({@code LIMIT 1}) <b>without</b> a COUNT query.
      *
+     * <p>When {@link #fetchCollection(String...)} is used, SQL {@code LIMIT} is skipped and the
+     * first distinct root is taken in memory (avoids truncating the join product). Prefer a
+     * selective {@code where*} so the in-memory set stays small. Filtered collections are a
+     * <em>partial</em> view — do not {@code save()} entities with {@code orphanRemoval} after
+     * constrained collection fetch.
+     *
      * @return first matching entity, or empty
      */
     public Optional<T> first() {
-        return executor.findBy(selectSpec(), q -> configure(q).limit(1).first());
+        ensureOpen();
+        try {
+            // SQL LIMIT + collection JOIN FETCH can truncate the cartesian product before
+            // DISTINCT; load without DB limit and take the first root in memory.
+            if (!fetchCollections.isEmpty()) {
+                List<T> rows = executor.findBy(selectSpec(), q -> configureSortOnly(q).all());
+                return rows.stream().findFirst();
+            }
+            return executor.findBy(selectSpec(), q -> configure(q).limit(1).first());
+        } finally {
+            markConsumed();
+        }
     }
 
     /**
@@ -2677,7 +3195,19 @@ public final class FluentQuery<T> {
      * @throws org.springframework.dao.IncorrectResultSizeDataAccessException if 2+ rows match
      */
     public Optional<T> one() {
-        return executor.findBy(selectSpec(), q -> configure(q).one());
+        ensureOpen();
+        try {
+            if (!fetchCollections.isEmpty()) {
+                List<T> rows = executor.findBy(selectSpec(), q -> configureSortOnly(q).all());
+                if (rows.size() > 1) {
+                    throw new org.springframework.dao.IncorrectResultSizeDataAccessException(1, rows.size());
+                }
+                return rows.stream().findFirst();
+            }
+            return executor.findBy(selectSpec(), q -> configure(q).one());
+        } finally {
+            markConsumed();
+        }
     }
 
     /**
@@ -2709,7 +3239,13 @@ public final class FluentQuery<T> {
      * @return matching entities
      */
     public List<T> get() {
-        return executor.findBy(selectSpec(), q -> configure(q).all());
+        ensureOpen();
+        assertNoCollectionFetchWithLimit();
+        try {
+            return executor.findBy(selectSpec(), q -> configure(q).all());
+        } finally {
+            markConsumed();
+        }
     }
 
     /**
@@ -2720,9 +3256,14 @@ public final class FluentQuery<T> {
      * @throws IllegalStateException if {@link #fetchCollection(String...)} was used
      */
     public Page<T> page(Pageable pageable) {
+        ensureOpen();
         assertNoCollectionFetchWithPagination();
         Pageable effective = resolvePageable(pageable);
-        return executor.findBy(selectSpec(), q -> configureSortOnly(q).page(effective));
+        try {
+            return executor.findBy(selectSpec(), q -> configureSortOnly(q).page(effective));
+        } finally {
+            markConsumed();
+        }
     }
 
     /**
@@ -2753,9 +3294,14 @@ public final class FluentQuery<T> {
      * @throws IllegalStateException if {@link #fetchCollection(String...)} was used
      */
     public Slice<T> slice(Pageable pageable) {
+        ensureOpen();
         assertNoCollectionFetchWithPagination();
         Pageable effective = resolvePageable(pageable);
-        return executor.findBy(selectSpec(), q -> configureSortOnly(q).slice(effective));
+        try {
+            return executor.findBy(selectSpec(), q -> configureSortOnly(q).slice(effective));
+        } finally {
+            markConsumed();
+        }
     }
 
     /**
@@ -2773,14 +3319,21 @@ public final class FluentQuery<T> {
         if (size <= 0) {
             throw new IllegalArgumentException("size must be > 0");
         }
-        int pageIndex = 0;
-        Slice<T> batch;
-        do {
-            batch = slice(PageRequest.of(pageIndex++, size, sort));
-            if (batch.hasContent()) {
-                consumer.accept(batch.getContent());
-            }
-        } while (batch.hasNext());
+        ensureOpen();
+        assertNoCollectionFetchWithPagination();
+        try {
+            int pageIndex = 0;
+            Slice<T> batch;
+            do {
+                Pageable pageable = PageRequest.of(pageIndex++, size, sort);
+                batch = executor.findBy(selectSpec(), q -> configureSortOnly(q).slice(pageable));
+                if (batch.hasContent()) {
+                    consumer.accept(batch.getContent());
+                }
+            } while (batch.hasNext());
+        } finally {
+            markConsumed();
+        }
     }
 
     /**
@@ -2789,6 +3342,9 @@ public final class FluentQuery<T> {
      * @return a closeable stream of matching entities
      */
     public Stream<T> stream() {
+        ensureOpen();
+        assertNoCollectionFetchWithLimit();
+        markConsumed();
         return executor.findBy(selectSpec(), q -> configure(q).stream());
     }
 
@@ -2797,14 +3353,25 @@ public final class FluentQuery<T> {
      * uses predicates + sort/limit. Combine with {@link #select(String...)} to limit
      * projected properties (recommended for lean SQL).
      *
+     * <p>Fails fast if {@link #fetch}/{@link #fetchCollection} were configured —
+     * projections do not apply those joins; use {@link #first()}/{@link #get()}/{@link #page}
+     * for entity fetches, or {@code select(...).firstAs(...)} without fetch.
+     *
      * @param <R>            projection type
      * @param projectionType interface or DTO class
      * @return first projected result, or empty
-     * @throws NullPointerException if {@code projectionType} is {@code null}
+     * @throws NullPointerException     if {@code projectionType} is {@code null}
+     * @throws IllegalStateException    if join fetches were configured
      */
     public <R> Optional<R> firstAs(Class<R> projectionType) {
         Objects.requireNonNull(projectionType, "projectionType");
-        return executor.findBy(predicateSpec(), q -> configure(q.as(projectionType)).limit(1).first());
+        ensureNoFetchesForProjection("firstAs");
+        ensureOpen();
+        try {
+            return executor.findBy(predicateSpec(), q -> configure(q.as(projectionType)).limit(1).first());
+        } finally {
+            markConsumed();
+        }
     }
 
     /**
@@ -2817,7 +3384,13 @@ public final class FluentQuery<T> {
      */
     public <R> List<R> getAs(Class<R> projectionType) {
         Objects.requireNonNull(projectionType, "projectionType");
-        return executor.findBy(predicateSpec(), q -> configure(q.as(projectionType)).all());
+        ensureNoFetchesForProjection("getAs");
+        ensureOpen();
+        try {
+            return executor.findBy(predicateSpec(), q -> configure(q.as(projectionType)).all());
+        } finally {
+            markConsumed();
+        }
     }
 
     /**
@@ -2831,8 +3404,14 @@ public final class FluentQuery<T> {
      */
     public <R> Page<R> pageAs(Class<R> projectionType, Pageable pageable) {
         Objects.requireNonNull(projectionType, "projectionType");
+        ensureNoFetchesForProjection("pageAs");
+        ensureOpen();
         Pageable effective = resolvePageable(pageable);
-        return executor.findBy(predicateSpec(), q -> configureSortOnly(q.as(projectionType)).page(effective));
+        try {
+            return executor.findBy(predicateSpec(), q -> configureSortOnly(q.as(projectionType)).page(effective));
+        } finally {
+            markConsumed();
+        }
     }
 
     /**
@@ -2841,7 +3420,12 @@ public final class FluentQuery<T> {
      * @return {@code true} if at least one row matches
      */
     public boolean exists() {
-        return executor.exists(predicateSpec());
+        ensureOpen();
+        try {
+            return executor.exists(predicateSpec());
+        } finally {
+            markConsumed();
+        }
     }
 
     /**
@@ -2850,7 +3434,12 @@ public final class FluentQuery<T> {
      * @return number of matching rows
      */
     public long count() {
-        return executor.count(predicateSpec());
+        ensureOpen();
+        try {
+            return executor.count(predicateSpec());
+        } finally {
+            markConsumed();
+        }
     }
 
     /**
@@ -2860,22 +3449,32 @@ public final class FluentQuery<T> {
      * restrictive {@code where*} / {@code limit} for large tables. The underlying executor must
      * also implement {@link CrudRepository} (true for {@link FluentQueryRepository}).
      *
+     * <p>When repositories use {@link dev.benjaminor.fluentquery.lifecycle.FluentQueryJpaRepository}
+     * with lifecycle enabled, each loaded entity goes through {@code onDeleting} / {@code onDeleted}
+     * (unlike {@code deleteAllInBatch}, which skips hooks).
+     *
      * @return number of deleted entities
      * @throws IllegalStateException if the executor is not a {@link CrudRepository}
      */
     @SuppressWarnings("unchecked")
     public long delete() {
+        ensureOpen();
         if (!(executor instanceof CrudRepository<?, ?> crud)) {
             throw new IllegalStateException(
                     "FluentQuery.delete() requires a CrudRepository executor "
                             + "(e.g. FluentQueryRepository).");
         }
-        List<T> rows = get();
-        if (rows.isEmpty()) {
-            return 0L;
+        try {
+            // Predicates only — avoid JOIN FETCH graphs on bulk delete loads.
+            List<T> rows = executor.findBy(predicateSpec(), q -> configure(q).all());
+            if (rows.isEmpty()) {
+                return 0L;
+            }
+            ((CrudRepository<T, ?>) crud).deleteAll(rows);
+            return rows.size();
+        } finally {
+            markConsumed();
         }
-        ((CrudRepository<T, ?>) crud).deleteAll(rows);
-        return rows.size();
     }
 
     /**
@@ -2948,6 +3547,26 @@ public final class FluentQuery<T> {
         }
     }
 
+    private void assertNoCollectionFetchWithLimit() {
+        if (!fetchCollections.isEmpty() && limit != null) {
+            throw new IllegalStateException(
+                    "FluentQuery: fetchCollection(...) is not compatible with limit() "
+                            + "(SQL LIMIT applies to the join product before DISTINCT). "
+                            + "Omit limit(), or load collections in a second query.");
+        }
+    }
+
+    private void ensureOpen() {
+        if (consumed) {
+            throw new IllegalStateException(
+                    "FluentQuery builder already executed; create a new query() / FluentQuery.of(...)");
+        }
+    }
+
+    private void markConsumed() {
+        this.consumed = true;
+    }
+
     /** Predicates only (count/exists/projections). */
     private Specification<T> predicateSpec() {
         return spec != null ? spec : alwaysTrue();
@@ -2965,10 +3584,12 @@ public final class FluentQuery<T> {
                     query.distinct(true);
                 }
                 for (String assoc : fetchToOne) {
-                    root.fetch(assoc, JoinType.LEFT);
+                    Fetches.fetchPathConstrained(
+                            root, cb, assoc, JoinType.LEFT, fetchOnConstraints.get(assoc));
                 }
                 for (String assoc : fetchCollections) {
-                    root.fetch(assoc, JoinType.LEFT);
+                    Fetches.fetchPathConstrained(
+                            root, cb, assoc, JoinType.LEFT, fetchOnConstraints.get(assoc));
                 }
             }
             return base.toPredicate(root, query, cb);
@@ -3011,7 +3632,7 @@ public final class FluentQuery<T> {
         }
         String pattern = LikePatterns.toPattern(raw);
         return (root, query, cb) -> {
-            Join<?, ?> join = Joins.reuseOrCreate(root, relation, JoinType.INNER);
+            Join<?, ?> join = Joins.joinPath(root, relation, JoinType.INNER);
             return cb.like(LikeExpressions.of(join, cb, column), pattern);
         };
     }
@@ -3179,7 +3800,7 @@ public final class FluentQuery<T> {
             Objects.requireNonNull(query, "query");
             Subquery<Integer> sq = query.subquery(Integer.class);
             Root<T> correlated = sq.correlate(root);
-            Join<?, ?> join = correlated.join(relation);
+            Join<?, ?> join = Joins.joinPath(correlated, relation, JoinType.INNER);
             sq.select(cb.literal(1));
             Predicate p = filter.toPredicate(join, cb);
             if (p != null) {
@@ -3188,6 +3809,12 @@ public final class FluentQuery<T> {
             Predicate exists = cb.exists(sq);
             return negate ? cb.not(exists) : exists;
         };
+    }
+
+    /** {@code EXISTS}/{@code NOT EXISTS} for a dotted (or single) association path with no leaf filter. */
+    private Specification<T> existsPathSpec(String relation, boolean negate) {
+        return existsSpec(relation, f -> {
+        }, negate);
     }
 
     private static String attrName(Attribute<?, ?> attribute) {
@@ -3212,6 +3839,18 @@ public final class FluentQuery<T> {
         }
         FluentQuery<T> nested = new FluentQuery<>(executor, filters);
         group.accept(nested);
+        if (!nested.fetchToOne.isEmpty()
+                || !nested.fetchCollections.isEmpty()
+                || !nested.fetchOnConstraints.isEmpty()
+                || nested.sort.isSorted()
+                || nested.limit != null
+                || !nested.selectColumns.isEmpty()
+                || nested.distinct) {
+            throw new IllegalStateException(
+                    "FluentQuery groups (where/orWhere with a Consumer) only support nested "
+                            + "predicates. Do not call fetch*/with*, orderBy*, limit, select, or distinct "
+                            + "inside a group.");
+        }
         return nested.spec;
     }
 
@@ -3219,18 +3858,48 @@ public final class FluentQuery<T> {
         return (root, query, cb) -> cb.conjunction();
     }
 
-    private static void addFetches(List<String> target, String... associations) {
+    private void ensureNoFetchesForProjection(String terminal) {
+        if (!fetchToOne.isEmpty() || !fetchCollections.isEmpty()) {
+            throw new IllegalStateException(
+                    terminal + " ignores join fetches; remove fetch()/fetchCollection()/with*() "
+                            + "or use first()/get()/page() for entity results with eager loads. "
+                            + "For lean projections, use select(...) without fetch.");
+        }
+    }
+
+    private void addFetches(List<String> target, List<String> conflicting, String... associations) {
         if (associations == null) {
             return;
         }
         for (String a : associations) {
-            if (Values.hasText(a)) {
-                String name = a.trim();
-                if (!target.contains(name)) {
-                    target.add(name);
-                }
+            if (!Values.hasText(a)) {
+                continue;
             }
+            String name = a.trim();
+            if (name.indexOf(':') >= 0) {
+                throw new IllegalArgumentException(
+                        "fetch/fetchCollection does not support column lists (got '" + a + "'). "
+                                + "JOIN FETCH always loads the full association. "
+                                + "Use select(\"" + a + "\") with getAs/firstAs for a lean projection, "
+                                + "or fetch(\"" + name.substring(0, name.indexOf(':')).trim()
+                                + "\") to eager-load the whole association.");
+            }
+            if (conflicting.contains(name)) {
+                throw new IllegalStateException(
+                        "FluentQuery: path '" + name + "' cannot be used with both fetch() and "
+                                + "fetchCollection(). Pick to-one or to-many.");
+            }
+            if (!target.contains(name)) {
+                target.add(name);
+            }
+            // Plain (re)fetch clears any prior ON constraint for this path.
+            fetchOnConstraints.remove(name);
         }
+    }
+
+    /** Requires a string-typed attribute; non-string columns fail at Criteria runtime. */
+    private Specification<T> equalIgnoreCaseSpec(String column, String upperNormalized) {
+        return (root, query, cb) -> cb.equal(cb.upper(root.get(column)), upperNormalized);
     }
 
     private static Object normalizeEqualValue(Object value) {

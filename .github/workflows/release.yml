@@ -2,6 +2,7 @@ name: Release
 
 # 1) Push tag v*     → creates a GitHub Release in draft
 # 2) Publish release → deploys core + starter to Maven Central
+#    (Central Portal autoPublish=true — no manual Publish in Sonatype)
 on:
   push:
     tags:
@@ -36,8 +37,8 @@ jobs:
             1. Review the notes and the tagged commit (POMs must be a non-SNAPSHOT version).
             2. Click **Publish release** to deploy `spring-fluent-query-core` and
                `spring-fluent-query-spring-boot-starter` to Maven Central.
-            3. With `autoPublish=false`, confirm **Publish** in
-               [Central Portal](https://central.sonatype.com/) if the deployment is waiting.
+            3. With `autoPublish=true`, Central Portal publishes after a successful upload
+               (no manual Publish in [Central Portal](https://central.sonatype.com/)).
 
   publish-maven:
     if: github.event_name == 'release'
@@ -98,6 +99,7 @@ jobs:
           </settings>
           EOF
           chmod 600 ~/.m2/settings.xml
+          # Strip YAML indentation from the generated XML
           sed -i 's/^          //' ~/.m2/settings.xml
 
       - name: Verify release version

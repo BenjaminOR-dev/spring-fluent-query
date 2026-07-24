@@ -4,6 +4,11 @@
       "name": "spring.fluent-query",
       "type": "dev.benjaminor.fluentquery.autoconfigure.SpringFluentQueryProperties",
       "description": "Spring Fluent Query settings."
+    },
+    {
+      "name": "spring.fluent-query.lifecycle",
+      "type": "dev.benjaminor.fluentquery.autoconfigure.SpringFluentQueryProperties$Lifecycle",
+      "description": "Optional Eloquent-style entity lifecycle hooks (not Active Record)."
     }
   ],
   "properties": [
@@ -12,6 +17,12 @@
       "type": "dev.benjaminor.fluentquery.LikeMode",
       "defaultValue": "portable",
       "description": "LIKE strategy: portable (UPPER+LIKE, all DBs) or oracle-unaccent (Oracle CONVERT US7ASCII)."
+    },
+    {
+      "name": "spring.fluent-query.lifecycle.enabled",
+      "type": "java.lang.Boolean",
+      "defaultValue": false,
+      "description": "When true, EntityLifecycleRegistry dispatches EntityLifecycleListener hooks. Also use @EnableFluentQueryLifecycle so repositories use FluentQueryJpaRepository."
     }
   ]
 }

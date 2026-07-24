@@ -12,6 +12,9 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.annotation.Transactional;
 
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 
@@ -43,6 +46,9 @@ class FluentQueryDataJpaIT {
 
     @Autowired
     BookRepository books;
+
+    @PersistenceContext
+    EntityManager entityManager;
 
     @BeforeEach
     void clean() {
@@ -385,6 +391,67 @@ class FluentQueryDataJpaIT {
                         .get())
                 .extracting(Author::getName)
                 .containsExactly("Ada");
+    }
+
+    @Test
+    void withCollection_constraintsFilterChildrenNotParents() {
+        Author ada = new Author();
+        ada.setName("Ada");
+        Book shortBook = new Book();
+        shortBook.setTitle("Short");
+        shortBook.setPages(50);
+        Book longBook = new Book();
+        longBook.setTitle("Long");
+        longBook.setPages(200);
+        Book longer = new Book();
+        longer.setTitle("Longer");
+        longer.setPages(300);
+        ada.addBook(shortBook);
+        ada.addBook(longBook);
+        ada.addBook(longer);
+        authors.save(ada);
+        entityManager.flush();
+        entityManager.clear();
+
+        // get() without SQL LIMIT — safe with collection fetch + multiple matching children
+        Author loaded = authors.query()
+                .where("name", "Ada")
+                .fetchCollection("books", f -> f.whereGt("pages", 100))
+                .get()
+                .get(0);
+
+        assertThat(loaded.getBooks()).extracting(Book::getTitle)
+                .containsExactlyInAnyOrder("Long", "Longer");
+    }
+
+    @Test
+    void first_withCollection_loadsWithoutSqlLimit() {
+        Author ada = new Author();
+        ada.setName("Ada");
+        Book shortBook = new Book();
+        shortBook.setTitle("Short");
+        shortBook.setPages(50);
+        Book longBook = new Book();
+        longBook.setTitle("Long");
+        longBook.setPages(200);
+        Book longer = new Book();
+        longer.setTitle("Longer");
+        longer.setPages(300);
+        ada.addBook(shortBook);
+        ada.addBook(longBook);
+        ada.addBook(longer);
+        authors.save(ada);
+        entityManager.flush();
+        entityManager.clear();
+
+        Author loaded = authors.query()
+                .where("name", "Ada")
+                .fetchCollection("books", f -> f.whereGt("pages", 100))
+                .first()
+                .orElseThrow();
+
+        assertThat(loaded.getBooks()).extracting(Book::getTitle)
+                .containsExactlyInAnyOrder("Long", "Longer");
     }
 
     private static Author authorWithScore(String name, int score) {

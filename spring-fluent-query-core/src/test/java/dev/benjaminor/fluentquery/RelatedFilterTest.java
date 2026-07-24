@@ -56,10 +56,10 @@ class RelatedFilterTest {
         Predicate and = mock(Predicate.class);
         when(from.get("title")).thenReturn(path);
         when(cb.equal(path, "Spring")).thenReturn(equal);
-        when(cb.and(any(Predicate[].class))).thenReturn(and);
 
-        assertThat(filter.toPredicate(from, cb)).isSameAs(and);
+        assertThat(filter.toPredicate(from, cb)).isSameAs(equal);
         verify(cb).equal(path, "Spring");
+        verify(cb, never()).and(any(Predicate[].class));
     }
 
     @Test
@@ -70,16 +70,70 @@ class RelatedFilterTest {
     }
 
     @Test
-    void optionalWhereContains_skipsBlank() {
-        RelatedFilter filter = new RelatedFilter().optionalWhereContains("title", " ");
+    void orWhere_composesWithOr() {
+        RelatedFilter filter = new RelatedFilter()
+                .whereEqual("title", "A")
+                .orWhere("title", "B");
         CriteriaBuilder cb = mock(CriteriaBuilder.class);
-        Predicate conjunction = mock(Predicate.class);
-        when(cb.conjunction()).thenReturn(conjunction);
-
         @SuppressWarnings("unchecked")
         From<?, ?> from = mock(From.class);
+        @SuppressWarnings("unchecked")
+        Path<Object> path = mock(Path.class);
+        Predicate eqA = mock(Predicate.class);
+        Predicate eqB = mock(Predicate.class);
+        Predicate or = mock(Predicate.class);
+        when(from.get("title")).thenReturn(path);
+        when(cb.equal(path, "A")).thenReturn(eqA);
+        when(cb.equal(path, "B")).thenReturn(eqB);
+        when(cb.or(eqA, eqB)).thenReturn(or);
 
-        assertThat(filter.toPredicate(from, cb)).isSameAs(conjunction);
-        verify(from, never()).get(any(String.class));
+        assertThat(filter.toPredicate(from, cb)).isSameAs(or);
+    }
+
+    @Test
+    void orWhere_emptyGroup_isIgnored_notAlwaysTrue() {
+        RelatedFilter filter = new RelatedFilter()
+                .whereEqual("a", 1)
+                .orWhere(g -> {
+                });
+        CriteriaBuilder cb = mock(CriteriaBuilder.class);
+        @SuppressWarnings("unchecked")
+        From<?, ?> from = mock(From.class);
+        @SuppressWarnings("unchecked")
+        Path<Object> path = mock(Path.class);
+        Predicate eq = mock(Predicate.class);
+        when(from.get("a")).thenReturn(path);
+        when(cb.equal(path, 1)).thenReturn(eq);
+
+        assertThat(filter.toPredicate(from, cb)).isSameAs(eq);
+        verify(cb, never()).or(any(Predicate.class), any(Predicate.class));
+        verify(cb, never()).conjunction();
+    }
+
+    @Test
+    void where_emptyGroup_isIgnored() {
+        RelatedFilter filter = new RelatedFilter()
+                .whereEqual("a", 1)
+                .where(g -> {
+                });
+        CriteriaBuilder cb = mock(CriteriaBuilder.class);
+        @SuppressWarnings("unchecked")
+        From<?, ?> from = mock(From.class);
+        @SuppressWarnings("unchecked")
+        Path<Object> path = mock(Path.class);
+        Predicate eq = mock(Predicate.class);
+        when(from.get("a")).thenReturn(path);
+        when(cb.equal(path, 1)).thenReturn(eq);
+
+        assertThat(filter.toPredicate(from, cb)).isSameAs(eq);
+        verify(cb, never()).and(any(Predicate.class), any(Predicate.class));
+        verify(cb, never()).conjunction();
+    }
+
+    @Test
+    void whereColumn_rejectsBadOperator() {
+        assertThatThrownBy(() -> new RelatedFilter().whereColumn("a", "~~", "b"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("operator");
     }
 }

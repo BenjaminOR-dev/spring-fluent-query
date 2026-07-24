@@ -2,7 +2,7 @@
 
 Guía para publicar `spring-fluent-query-core` y `spring-fluent-query-spring-boot-starter` en [Maven Central](https://central.sonatype.com/).
 
-Opciones de deploy: **Docker** (`.env` local) o **GitHub Actions** (tag `v*` → draft Release → Publish release → Maven; ver [.github/workflows/release.yml](.github/workflows/release.yml)).
+Opciones de deploy: **Docker** (`.env` local) o **GitHub Actions** (tag `v*` → draft Release → Publish release → Maven; `autoPublish=true` en Central Portal; ver [.github/workflows/release.yml](.github/workflows/release.yml)).
 
 ## Qué se publica
 
@@ -69,13 +69,13 @@ Para flujos sin Docker, puedes usar [docs/settings-central.xml.example](docs/set
 | `spring-fluent-query-example/pom.xml` | `<version>` del parent |
 
 ```xml
-<version>0.1.1</version>
+<version>0.2.0</version>
 ```
 
 ```xml
 <scm>
     ...
-    <tag>v0.1.1</tag>
+    <tag>v0.2.0</tag>
 </scm>
 ```
 
@@ -92,11 +92,11 @@ En cada uno actualiza **Maven**, **Gradle Kotlin** y **Gradle Groovy**:
 Ejemplo:
 
 ```xml
-<version>0.1.1</version>
+<version>0.2.0</version>
 ```
 
 ```kotlin
-implementation("io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:0.1.1")
+implementation("io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:0.2.0")
 ```
 
 #### Opcional (recomendado)
@@ -159,7 +159,7 @@ Flujo en dos pasos ([.github/workflows/release.yml](.github/workflows/release.ym
 ```text
 git push origin vX.Y.Z  →  Action crea un GitHub Release en draft
 tú: Publish release     →  Action hace deploy a Maven Central
-Central Portal          →  Publish (si autoPublish=false)
+Central Portal          →  publicación automática (autoPublish=true)
 ```
 
 1. Deja el POM en versión **release** (sin `-SNAPSHOT`), commit y tag.
@@ -179,21 +179,17 @@ Configura estos [secrets del repositorio](https://docs.github.com/en/actions/sec
 
 ### 5. Publicar en Central Portal
 
-Con `autoPublish=false` (config actual), tras el upload del paso 4:
+Con `autoPublish=true` (config actual), tras el upload del paso 4 Central Portal publica automáticamente.
 
-1. Abre [central.sonatype.com](https://central.sonatype.com/) → tu deployment.
-2. Revisa la validación.
-3. Pulsa **Publish**.
-
-En unos minutos debería aparecer en [search.maven.org](https://search.maven.org/).
+No hace falta pulsar **Publish** en Sonatype. Si un deployment queda en validación fallida, revisa [central.sonatype.com](https://central.sonatype.com/).
 
 ### 6. Tag en Git
 
 El tag debe apuntar al **commit del paso 1** (POMs + README + `<scm><tag>` ya incluidos):
 
 ```bash
-git tag -a v0.1.1 -m "Release 0.1.1"
-git push origin v0.1.1
+git tag -a v0.2.0 -m "Release 0.2.0"
+git push origin v0.2.0
 ```
 
 Eso **solo** crea el draft en GitHub; el deploy a Maven ocurre cuando publiques el Release.
@@ -203,7 +199,7 @@ Eso **solo** crea el draft en GitHub; el deploy a Maven ocurre cuando publiques 
 En los **4 POMs** (mismo listado del paso 1), commit separado en `main`:
 
 ```xml
-<version>0.1.1-SNAPSHOT</version>
+<version>0.2.0-SNAPSHOT</version>
 ```
 
 Los README **no** cambian aquí — siguen mostrando la última versión publicada en Central.
@@ -216,14 +212,14 @@ Los README **no** cambian aquí — siguen mostrando la última versión publica
 <dependency>
     <groupId>io.github.benjaminor-dev</groupId>
     <artifactId>spring-fluent-query-spring-boot-starter</artifactId>
-    <version>0.1.1</version>
+    <version>0.2.0</version>
 </dependency>
 ```
 
 **Gradle**
 
 ```kotlin
-implementation("io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:0.1.1")
+implementation("io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:0.2.0")
 ```
 
 Sin repositorios extra. Añade también `spring-boot-starter-data-jpa` en tu app (el starter lo marca como opcional).
@@ -238,7 +234,3 @@ Sin repositorios extra. Añade también `spring-boot-starter-data-jpa` en tu app
 | Errores de Javadoc | `failOnError=false` en el perfil release; mejora docs después |
 | Se subió el example | El deploy usa `-pl core,starter -am`; example queda excluido de Central |
 
-## Pendiente
-
-- [ ] Configurar secrets de GitHub Actions y validar un release (tag → draft → Publish release)
-- [ ] `autoPublish=true` cuando los releases automatizados estén estables

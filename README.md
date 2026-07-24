@@ -25,11 +25,12 @@ Spring Fluent Query adds a readable chain (`where` → `fetch` → `latest` / `f
 - Column-to-column: `whereColumn` / `orWhereColumn`; ranges: `whereBetween` / `whereNotBetween`
 - Relation existence: `whereHas` / `whereDoesntHave` / `orWhereHas` / `orWhereDoesntHave` / `whereRelation` (optional nested `EXISTS` via `RelatedFilter`)
 - Type-safe metamodel overloads (`User_.email`, …) when the host generates the JPA static metamodel
-- Eager loading: `fetch` (to-one) and `fetchCollection` (to-many, with clear pagination rules)
+- Eager loading: `fetch` / `with` (to-one) and `fetchCollection` / `withCollection` (to-many; Eloquent-style `ON` constraints)
 - Column projection: `select(...)` (Spring Data `project`; prefer with `*As`)
 - Pagination helpers: `page` / `slice` / `paginate` / `chunk`
 - Terminals: `first` / `firstOrFail` / `latest` / `oldest` / `one` / `oneOrFail` / `get` / `stream` / `exists` / `count` (+ `*OrNull` / `*As`)
 - Portable LIKE by default (`UPPER` + `LIKE`); optional Oracle unaccent mode
+- Optional Eloquent-style entity lifecycle hooks (Spring beans — not Active Record)
 - Core usable without the Boot starter (`spring-fluent-query-core`)
 
 <a id="why-use-fluent-query"></a>
@@ -62,6 +63,7 @@ You can still mix typed `Specification`s with string-column helpers on the same 
 - [Quick start](#quick-start)
 - [CRUD pattern](#crud-pattern)
 - [Configuration](#configuration)
+- [Entity lifecycle hooks (optional)](#entity-lifecycle-hooks)
 - [Usage guide](#usage-guide)
   - [Reference imports](#reference-imports)
   - [Strict filters (`where*`, `orWhere*`, groups)](#strict-filters-where-orwhere-groups)
@@ -78,6 +80,7 @@ You can still mix typed `Specification`s with string-column helpers on the same 
   - [Projections (`as`) and `select`](#projections-as-and-select)
   - [Typed Specifications](#typed-specifications)
 - [PropertyFilters](#propertyfilters)
+- [Values helpers](#values-helpers)
 - [Boot 3.x / 4.x compatibility](#boot-3-4-compatibility)
 - [Module architecture](#module-architecture)
 - [Executable reference (example)](#executable-reference-example)
@@ -135,7 +138,7 @@ Add the Fluent Query starter **and** Spring Data JPA:
 <dependency>
     <groupId>io.github.benjaminor-dev</groupId>
     <artifactId>spring-fluent-query-spring-boot-starter</artifactId>
-    <version>0.1.1</version>
+    <version>0.2.0</version>
 </dependency>
 <dependency>
     <groupId>org.springframework.boot</groupId>
@@ -146,14 +149,14 @@ Add the Fluent Query starter **and** Spring Data JPA:
 **Gradle (Kotlin DSL)**
 
 ```kotlin
-implementation("io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:0.1.1")
+implementation("io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:0.2.0")
 implementation("org.springframework.boot:spring-boot-starter-data-jpa")
 ```
 
 **Gradle (Groovy)**
 
 ```groovy
-implementation 'io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:0.1.1'
+implementation 'io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:0.2.0'
 implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 ```
 
@@ -337,7 +340,83 @@ spring.fluent-query.like-mode=portable
 
 `oracle-unaccent` is **not** portable: H2 / PostgreSQL / MySQL reject Oracle `CONVERT(..., 'US7ASCII')`. Keep `portable` unless you run on Oracle and need unaccented matching.
 
-No other `spring.fluent-query.*` properties exist today — extend `FluentQueryRepository` and call `query()`.
+<a id="entity-lifecycle-hooks"></a>
+## Entity lifecycle hooks (optional)
+
+Eloquent-style `creating` / `created` / `updating` / `updated` / `saving` / `saved` / `deleting` / `deleted` — as **Spring beans**, not methods on the entity. Entities stay POJOs (no Active Record).
+
+| Eloquent (Laravel) | Spring Fluent Query |
+|--------------------|---------------------|
+| `static::creating` on the model | `@Component` implementing `EntityLifecycleListener<T>` |
+| Hooks on `$user->save()` | Hooks on `repository.save()` via `FluentQueryJpaRepository` |
+| Mass `Model::query()->delete()` may skip model events | `deleteAllInBatch` / `deleteInBatch` **skip** hooks; `query().delete()` loads then `deleteAll` → hooks **do** fire |
+
+### Enable (two steps)
+
+1. Annotate your application (or JPA config) with `@EnableFluentQueryLifecycle` so repositories use `FluentQueryJpaRepository`.
+2. Set `spring.fluent-query.lifecycle.enabled=true` so the registry dispatches callbacks (default is `false`).
+
+```java
+@SpringBootApplication
+@EnableFluentQueryLifecycle
+public class Application { }
+```
+
+```properties
+spring.fluent-query.lifecycle.enabled=true
+```
+
+```yaml
+spring:
+  fluent-query:
+    lifecycle:
+      enabled: true
+```
+
+Equivalent without the meta-annotation:
+
+```java
+@EnableJpaRepositories(
+    repositoryFactoryBeanClass = FluentQueryJpaRepositoryFactoryBean.class,
+    repositoryBaseClass = FluentQueryJpaRepository.class)
+```
+
+### Listener example
+
+```java
+@Component
+class UserLifecycle extends AbstractEntityLifecycleListener<User> {
+
+    @Override
+    public void onCreated(User user) {
+        // after insert
+    }
+
+    @Override
+    public void onUpdating(User user) {
+        // before update — current entity state
+    }
+
+    @Override
+    public void onDeleted(User user) {
+        // after delete
+    }
+}
+```
+
+`AbstractEntityLifecycleListener` resolves `entityType()` from the generic argument. Matching is **exact** (a listener for `User` does not run for a subclass).
+
+### Hook order
+
+- **Save (new):** `onSaving` → `onCreating` → persist → `onCreated` → `onSaved`
+- **Save (existing):** `onSaving` → `onUpdating` → merge → `onUpdated` → `onSaved`
+- **Delete:** `onDeleting` → remove → `onDeleted`
+- **`saveAll` / `deleteAll` / `deleteById` / `query().delete()`:** per entity (same as above)
+- **`deleteAllInBatch` / `deleteInBatch` / `deleteAllByIdInBatch`:** no hooks (batch JPQL)
+
+The starter always registers an `EntityLifecycleRegistry` bean (collects listeners). With `lifecycle.enabled=false` (default), dispatch is a no-op even if the factory bean is wired.
+
+`save` / `delete` are `@Transactional`: a failure in a pre-hook (e.g. `onCreating`) aborts persist/remove and rolls back when called through the Spring repository proxy. `IllegalStateException` / `IllegalArgumentException` from hooks are rethrown as `FluentQueryLifecycleException` so Spring Data does not rewrite them as `InvalidDataAccessApiUsageException`.
 
 <a id="usage-guide"></a>
 ## Usage guide
@@ -415,7 +494,7 @@ Page<User> page = userRepository.query()
         .page(PageRequest.of(0, 20));
 ```
 
-Also: `optionalWhereEqual`, `optionalWhereContains` / `StartsWith` / `EndsWith` / `LikePattern`, `optionalOrWhere` / `optionalOrWhereLike` / `optionalOrWhereIn` / `optionalOrWhereNotEqual` / `optionalOrWhereNotIn`, `optionalWhereNotEqual`, `optionalWhereRelatedEqual`, `optionalWhereRelatedLike`, `optionalWhereNotIn`, `optionalWhereGt` / `Gte` / `Lt` / `Lte` (long aliases `optionalWhereGreaterThan*` / `LessThan*`), `optionalWhereBetween` / `NotBetween`, `optionalWhereDate` / `Year` / `Month` / `Day` / `Time`, `optionalWhereRelation`.
+Also: `optionalWhereEqual`, `optionalWhereEqualIgnoreCase`, `optionalWhereContains` / `StartsWith` / `EndsWith` / `LikePattern`, `optionalOrWhere` / `optionalOrWhereLike` / `optionalOrWhereIn` / `optionalOrWhereNotEqual` / `optionalOrWhereNotIn`, `optionalWhereNotEqual`, `optionalWhereRelatedEqual`, `optionalWhereRelatedLike`, `optionalWhereNotIn`, `optionalWhereGt` / `Gte` / `Lt` / `Lte` (long aliases `optionalWhereGreaterThan*` / `LessThan*`), `optionalWhereBetween` / `NotBetween`, `optionalWhereDate` / `Year` / `Month` / `Day` / `Time`, `optionalWhereRelation`.
 
 `whereIf` / `when` / `unless` are different: they take an explicit **boolean**, not “value present?”.
 
@@ -542,7 +621,7 @@ List<Author> authors = authorRepository.query()
         .get();
 ```
 
-`RelatedFilter` mirrors the main builder for nested predicates: `where` / `whereEqual` / `whereLike` / `whereContains` / `whereStartsWith` / `whereEndsWith` / `whereLikePattern` / `whereIn` / `whereNotIn` / comparisons (`whereGt`… + long forms) / ranges / date extracts / full `optionalWhere*` family (including escaped LIKE optionals), etc. Nested LIKE also respects `spring.fluent-query.like-mode`.
+`RelatedFilter` covers nested predicates (equality / LIKE / In / comparisons / ranges / dates / `optionalWhere*` / `whereColumn` / `whereEqualIgnoreCase` / `orWhere` / `when`/`unless`). Root paths `a.b` → use `whereRelated*` / `whereRelation` / `whereHas` (not `where("a.b")`). Nested LIKE respects `spring.fluent-query.like-mode`. Legacy note — mirrors the main builder for nested predicates: `where` / `whereEqual` / `whereLike` / `whereContains` / `whereStartsWith` / `whereEndsWith` / `whereLikePattern` / `whereIn` / `whereNotIn` / comparisons (`whereGt`… + long forms) / ranges / date extracts / full `optionalWhere*` family (including escaped LIKE optionals), etc. Nested LIKE also respects `spring.fluent-query.like-mode`.
 
 <a id="type-safe-metamodel"></a>
 ### Type-safe metamodel
@@ -574,8 +653,8 @@ Enable metamodel generation in the host (annotation processor / Hibernate JPamod
 
 | Method | Use for | With `page` / `slice` / `paginate` / `chunk` |
 |--------|---------|-----------------------------------------------|
-| `fetch("profile")` | To-one (`@ManyToOne` / `@OneToOne`) | ✅ Safe |
-| `fetchCollection("orders")` | To-many (`@OneToMany` / `@ManyToMany`) | ❌ Throws `IllegalStateException` |
+| `fetch("profile")` / `fetch(path, f -> …)` / `with(...)` | To-one; `Consumer` overload = `ON` constraints | ✅ Safe |
+| `fetchCollection("orders")` / `fetchCollection(path, f -> …)` / `withCollection(...)` | To-many; `Consumer` overload = `ON` | ❌ Throws `IllegalStateException` |
 | `select("id", "email")` | Property projection (`project`); prefer with `*As` | ✅ |
 | `distinct()` | Force DISTINCT | ✅ |
 | `limit(n)` | Cap rows for `get()` / Spring `limit` | Applied via pageable resolution when useful |
@@ -588,6 +667,7 @@ import org.springframework.data.domain.PageRequest;
 Page<User> page = userRepository.query()
         .where("active", true)
         .fetch("status")                 // to-one only
+        .fetch("profile.address")        // nested to-one path
         .orderByDesc("createdAt")
         .page(PageRequest.of(0, 20));
 ```
@@ -603,17 +683,67 @@ userRepository.query()
 
 Prefer loading collections in a **second query**, or use `get()` / `first()` without pagination when you truly need collection fetch.
 
+With `fetchCollection`, `first()` / `one()` / `latest()` **skip** SQL `LIMIT`: they load roots (with sort) and pick in memory so the JOIN product is not truncated before DISTINCT. Keep `where*` selective.
+
+#### `fetch` / `fetchCollection` with constraints (Eloquent `with`)
+
+Canonical API is on **`fetch`**. `with` / `withCollection` are Eloquent-named aliases.
+
+```java
+// to-one: LEFT JOIN FETCH + ON on the leaf
+.query()
+    .fetch("profile", f -> f.where("active", true))
+    .fetch("company.address", f -> f.whereNotNull("city"))
+    .first();
+
+// mix plain + constrained — prefer FetchRel (no nulls)
+.query().fetch(
+        FetchRel.of("rel1.rel2", f -> f.where("active", true)),
+        FetchRel.of("rel3"),
+        FetchRel.of("rel4", f -> f.whereNotNull("code"))
+).first();
+
+// Map alternative: null value = plain fetch (LinkedHashMap if order matters)
+Map<String, Consumer<RelatedFilter>> rels = new LinkedHashMap<>();
+rels.put("rel3", null);
+rels.put("rel1.rel2", f -> f.where("active", true));
+.query().fetch(rels);
+
+// collections (same rules: no page/limit)
+.query()
+    .fetchCollection("books", f -> f.whereGt("pages", 100))
+    .get();   // preferred when several children match
+
+.query().fetchCollection(
+        FetchRel.of("books", f -> f.whereGt("pages", 100)),
+        FetchRel.of("tags")
+);
+
+// Eloquent aliases
+.query().with(
+        FetchRel.of("rel1.rel2", f -> f.where("active", true)),
+        FetchRel.of("rel3")
+);
+```
+
+Important:
+
+- Constraints go on `ON` (not `WHERE`) — the parent is kept. To filter roots use `whereHas` / `whereRelated*`.
+- To-one vs collection stay separate (`fetch` vs `fetchCollection`); the same path on both throws.
+- A plain `fetch("path")` after a constrained one **clears** that path's `ON`.
+- Filtered collections are a **partial** in-memory view. Do **not** `save()` the root if the association has `orphanRemoval` / cascade remove — Hibernate may delete children not present in the collection. Treat constrained collection fetch as read-only, or reload without the filter before mutating.
+
 <a id="terminals"></a>
 ### Terminals
 
 | Terminal | Result | Notes |
 |----------|--------|-------|
-| `first()` | `Optional<T>` | First match (`LIMIT 1`); OK if many match; **no COUNT** |
+| `first()` | `Optional<T>` | First match (`LIMIT 1`); with `fetchCollection` no SQL LIMIT (in-memory pick); **no COUNT** |
 | `firstOrFail()` | `T` | Throws `FluentQueryNotFoundException` if empty (optional sugar) |
 | `firstOrNull()` | `T` or `null` | |
 | `latest(property)` | `Optional<T>` | `orderByDesc` + `first` |
 | `oldest(property)` | `Optional<T>` | `orderByAsc` + `first` |
-| `one()` | `Optional<T>` | Expects 0–1 row; Spring Data throws if **2+** match |
+| `one()` | `Optional<T>` | Expects 0–1 root; throws `IncorrectResultSizeDataAccessException` if **2+** (also with `fetchCollection`) |
 | `oneOrFail()` | `T` | Throws `FluentQueryNotFoundException` if empty (optional sugar) |
 | `get()` | `List<T>` | Honors `limit`; without limit can load the whole table |
 | `page(pageable)` | `Page<T>` | With COUNT; no `fetchCollection` |
@@ -733,6 +863,21 @@ Page<UserSummary> page = userRepository.query()
 
 Also: `select(User_.id, User_.email)` when the static metamodel is available.
 
+Association shorthand (only for `select` / projections — **not** for `fetch`). Tokens like `assoc:col1,col2` are expanded by `SelectPaths` (`dev.benjaminor.fluentquery.support.SelectPaths`) before Spring Data `project`:
+
+```java
+// Same as select("status.id", "status.name", "profile.address.city")
+userRepository.query()
+        .where("active", true)
+        .select("status:id,name", "profile.address:city")
+        .getAs(UserSummary.class);
+```
+
+`fetch("status:id,name")` throws `IllegalArgumentException`: JPA cannot safely JOIN FETCH a partial entity state. Use `fetch("status")` for a full eager load, or `select(…).getAs(…)` for lean columns.
+
+Optional JPA base (no hard-coded audit column names): `dev.benjaminor.fluentquery.jpa.MapsIdPersistable`
+for `@MapsId` entities + Spring Data `Persistable`. Hosts map `createdAt` / local column names on their own `@MappedSuperclass`.
+
 <a id="typed-specifications"></a>
 ### Typed Specifications
 
@@ -775,6 +920,22 @@ Advanced options:
 
 - Implement only `PropertyFilters` on a custom repository
 - Call `FluentQuery.of(executor)` (no rich filters) or `FluentQuery.of(executor, filters)` manually
+
+<a id="values-helpers"></a>
+## Values helpers
+
+`dev.benjaminor.fluentquery.support.Values` — small static helpers used by Fluent Query (and available to hosts) for blank/empty checks and text normalisation. Unicode spaces (including NBSP) count as blank.
+
+| Method | Returns |
+|--------|---------|
+| `isBlank(String)` / `hasText(String)` | blank / non-blank (`null`, empty, or only Unicode spaces) |
+| `trimToNull(String)` | stripped text, or `null` if blank |
+| `trimToEmpty(String)` | stripped text, or `""` (never `null`) |
+| `trimToNullUpper(String)` | `trimToNull` then upper-case (`Locale.ROOT`) |
+| `isEmpty` / `isNotEmpty` | `Collection`, `Map`, or array — `null` or empty |
+| `isNull` / `isNotNull` | reference null checks |
+| `requireText(String, message)` | value, or `IllegalArgumentException` if blank |
+| `defaultIfNull(T, T)` | value or non-null fallback |
 
 <a id="boot-3-4-compatibility"></a>
 ## Boot 3.x / 4.x compatibility
@@ -843,7 +1004,7 @@ mvn -pl spring-fluent-query-example spring-boot:run
 
 On startup it runs a full **Create / Read / Update / Delete** sample via [`DemoCrudService`](spring-fluent-query-example/src/main/java/dev/benjaminor/fluentquery/example/DemoCrudService.java) (see logs).
 
-The example module also includes H2 `@DataJpaTest` coverage ([`FluentQueryDataJpaIT`](spring-fluent-query-example/src/test/java/dev/benjaminor/fluentquery/example/it/FluentQueryDataJpaIT.java)) for nested `whereHas`, date extracts, `whereColumn`, `whereNotBetween`, `orWhereHas`, `whereRelation`, `unless`, `firstOrFail` / `oneOrFail`, `paginate`, `select` + `firstAs`, optionals, `delete()`, and `fetchCollection` + `page` rejection.
+The example module also includes H2 `@SpringBootTest (H2 IT)` coverage ([`FluentQueryDataJpaIT`](spring-fluent-query-example/src/test/java/dev/benjaminor/fluentquery/example/it/FluentQueryDataJpaIT.java)) for nested `whereHas`, date extracts, `whereColumn`, `whereNotBetween`, `orWhereHas`, `whereRelation`, `unless`, `firstOrFail` / `oneOrFail`, `paginate`, `select` + `firstAs`, optionals, `delete()`, `fetchCollection` + `page` rejection, and constrained `fetchCollection` with **multiple** matching children via `get()` / `first()`.
 
 <a id="troubleshooting"></a>
 ## Troubleshooting
@@ -852,9 +1013,13 @@ The example module also includes H2 `@DataJpaTest` coverage ([`FluentQueryDataJp
 
 Extend `FluentQueryRepository<Entity, Id>` (not only `JpaRepository`). One `extends` is enough — do not add a second interface for `PropertyFilters`.
 
-### `fetchCollection` + `page` / `slice` / `paginate` / `chunk` throws
+### `fetchCollection` + `page` / `slice` / `paginate` / `chunk` / `limit` throws
 
-Expected: collection fetch with pagination is unsafe (cartesian product / wrong COUNT). Use `fetch()` for to-one, or load collections in a second query.
+Expected: collection fetch with pagination or `limit()` is unsafe (cartesian product / COUNT or LIMIT on the join). Use `fetch()` for to-one, `get()` / `first()` without `limit`, or load collections in a second query.
+
+### Filtered collection + `orphanRemoval`
+
+`fetchCollection(path, f -> …)` leaves only children that match the `ON`. If the association has `orphanRemoval = true` and you save the root, Hibernate may delete children missing from the collection. Treat that load as **read-only**, or reload without the filter before mutating/saving.
 
 ### `get()` is slow / OOM
 
@@ -894,7 +1059,7 @@ Ensure you use the published starter (imports file under `META-INF/spring/org.sp
 | `where(Specification)` | AND typed Spec (`null` Spec ignored) |
 | `where(column, value)` | Strict equality; `null` → `IS NULL` |
 | `where(Consumer)` | AND group |
-| `optionalWhere*` | No-op if value absent: `optionalWhere` / `Equal`, `Like` / `Contains` / `StartsWith` / `EndsWith` / `LikePattern`, `In` / `NotIn`, `NotEqual`, `Gt`/`Gte`/`Lt`/`Lte` (+ long aliases), `Between` / `NotBetween`, date extracts, `Related*` / `Relation`; OR: `optionalOrWhere` / `Like` / `In` / `NotEqual` / `NotIn` |
+| `optionalWhere*` | No-op if value absent: `optionalWhere` / `Equal` / `EqualIgnoreCase`, `Like` / `Contains` / `StartsWith` / `EndsWith` / `LikePattern`, `In` / `NotIn`, `NotEqual`, `Gt`/`Gte`/`Lt`/`Lte` (+ long aliases), `Between` / `NotBetween`, date extracts, `Related*` / `Relation`; OR: `optionalOrWhere` / `Like` / `In` / `NotEqual` / `NotIn` |
 | `whereIf` / `when` / `unless` | Boolean conditionals; `when` supports then/else (Eloquent); `unless` = `when(!condition, …)` |
 | `orWhere(...)` | OR Spec / equality / group |
 | `whereNot` | NOT Spec |
@@ -919,9 +1084,11 @@ Ensure you use the published starter (imports file under `META-INF/spring/org.sp
 
 | Method | Description |
 |--------|-------------|
-| `fetch` | LEFT JOIN FETCH to-one; enables DISTINCT |
-| `fetchCollection` | LEFT JOIN FETCH to-many; **not** with page/slice/paginate/chunk |
-| `select` | Eloquent-style property projection (`project`); best with `*As` |
+| `fetch` / `with` | LEFT JOIN FETCH to-one; `fetch(path, f -> …)` = `ON` constraints; **no** `:` |
+| `fetchCollection` / `withCollection` | LEFT JOIN FETCH to-many; `fetchCollection(path, f -> …)` = `ON`; **not** with page/slice/paginate/chunk/**limit**; `first`/`one` skip SQL LIMIT; partial view — beware `orphanRemoval`; **no** `:` |
+| `FetchRel` | Typed plain/constrained spec for batch `fetch`/`fetchCollection` (prefer over `Map` with nulls) |
+| `whereHas` / `whereRelation` / `whereRelated*` | Association or nested path (`company.address`); predicates on the leaf |
+| `select` | Property projection (`project`); shorthand `assoc:col1,col2` via `SelectPaths`; best with `*As` |
 | `distinct` | Force DISTINCT |
 | `limit` | Max rows for list terminals |
 | `orderByAsc` / `orderByDesc` / `orderBy` | Sorting |
@@ -987,7 +1154,7 @@ Releases are published to Maven Central — see [PUBLISHING.md](PUBLISHING.md) (
 ## Roadmap
 
 - Richer example module (REST + sample queries)
-- `autoPublish=true` in Central Portal when release automation is stable
+- Optional inheritance matching for lifecycle listeners (exact type only today)
 
 <a id="license"></a>
 ## License

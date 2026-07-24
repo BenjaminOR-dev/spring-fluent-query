@@ -25,11 +25,12 @@ Spring Fluent Query adiciona uma cadeia legível (`where` → `fetch` → `lates
 - Coluna a coluna: `whereColumn` / `orWhereColumn`; intervalos: `whereBetween` / `whereNotBetween`
 - Existência de relação: `whereHas` / `whereDoesntHave` / `orWhereHas` / `orWhereDoesntHave` / `whereRelation` (`EXISTS` aninhado opcional via `RelatedFilter`)
 - Sobrecargas type-safe do metamodelo (`User_.email`, …) quando o host gera o metamodelo estático JPA
-- Carga eager: `fetch` (to-one) e `fetchCollection` (to-many, com regras claras de paginação)
+- Carga eager: `fetch` / `with` (to-one) e `fetchCollection` / `withCollection` (to-many; constraints estilo Eloquent via `ON`)
 - Projeção de colunas: `select(...)` (Spring Data `project`; preferível com `*As`)
 - Paginação: `page` / `slice` / `paginate` / `chunk`
 - Terminais: `first` / `firstOrFail` / `latest` / `oldest` / `one` / `oneOrFail` / `get` / `stream` / `exists` / `count` (+ `*OrNull` / `*As`)
 - LIKE portátil por padrão (`UPPER` + `LIKE`); modo Oracle unaccent opcional
+- Hooks opcionais de ciclo de vida estilo Eloquent (beans Spring — sem Active Record)
 - Core utilizável sem o starter do Boot (`spring-fluent-query-core`)
 
 <a id="por-que-usar-fluent-query"></a>
@@ -62,6 +63,7 @@ Você ainda pode misturar `Specification` tipados com helpers de coluna string n
 - [Início rápido](#inicio-rapido)
 - [Padrão CRUD](#padrao-crud)
 - [Configuração](#configuracao)
+- [Hooks de ciclo de vida (opcional)](#hooks-ciclo-de-vida)
 - [Guia de uso](#guia-de-uso)
   - [Imports de referência](#imports-de-referencia)
   - [Filtros estritos (`where*`, `orWhere*`, grupos)](#filtros-estritos-where-orwhere-grupos)
@@ -78,6 +80,7 @@ Você ainda pode misturar `Specification` tipados com helpers de coluna string n
   - [Projeções (`as`) e `select`](#projecoes-as-e-select)
   - [Specifications tipadas](#specifications-tipadas)
 - [PropertyFilters](#propertyfilters)
+- [Helpers `Values`](#helpers-values)
 - [Compatibilidade Boot 3.x / 4.x](#compatibilidade-boot-3-4)
 - [Arquitetura de módulos](#arquitetura-de-modulos)
 - [Referência executável (example)](#referencia-executavel-example)
@@ -135,7 +138,7 @@ Adicione o starter do Fluent Query **e** Spring Data JPA:
 <dependency>
     <groupId>io.github.benjaminor-dev</groupId>
     <artifactId>spring-fluent-query-spring-boot-starter</artifactId>
-    <version>0.1.1</version>
+    <version>0.2.0</version>
 </dependency>
 <dependency>
     <groupId>org.springframework.boot</groupId>
@@ -146,14 +149,14 @@ Adicione o starter do Fluent Query **e** Spring Data JPA:
 **Gradle (Kotlin DSL)**
 
 ```kotlin
-implementation("io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:0.1.1")
+implementation("io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:0.2.0")
 implementation("org.springframework.boot:spring-boot-starter-data-jpa")
 ```
 
 **Gradle (Groovy)**
 
 ```groovy
-implementation 'io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:0.1.1'
+implementation 'io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:0.2.0'
 implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 ```
 
@@ -337,7 +340,83 @@ spring.fluent-query.like-mode=portable
 
 `oracle-unaccent` **não** é portátil: H2 / PostgreSQL / MySQL rejeitam o `CONVERT(..., 'US7ASCII')` do Oracle. Fique em `portable` salvo se rodar no Oracle e precisar de matching sem acentos.
 
-Hoje não existem outras propriedades `spring.fluent-query.*`: estenda `FluentQueryRepository` e chame `query()`.
+<a id="hooks-ciclo-de-vida"></a>
+## Hooks de ciclo de vida (opcional)
+
+Estilo Eloquent (`creating` / `created` / `updating` / `updated` / `saving` / `saved` / `deleting` / `deleted`) como **beans Spring**, não métodos na entidade. Entidades continuam POJOs (sem Active Record).
+
+| Eloquent (Laravel) | Spring Fluent Query |
+|--------------------|---------------------|
+| `static::creating` no model | `@Component` que implementa `EntityLifecycleListener<T>` |
+| Hooks em `$user->save()` | Hooks em `repository.save()` via `FluentQueryJpaRepository` |
+| Delete em massa pode pular eventos | `deleteAllInBatch` / `deleteInBatch` **pulam** hooks; `query().delete()` carrega e `deleteAll` → hooks **disparam** |
+
+### Ativar (dois passos)
+
+1. Anote a aplicação (ou a config JPA) com `@EnableFluentQueryLifecycle` para usar `FluentQueryJpaRepository`.
+2. Defina `spring.fluent-query.lifecycle.enabled=true` para o registry disparar callbacks (default `false`).
+
+```java
+@SpringBootApplication
+@EnableFluentQueryLifecycle
+public class Application { }
+```
+
+```properties
+spring.fluent-query.lifecycle.enabled=true
+```
+
+```yaml
+spring:
+  fluent-query:
+    lifecycle:
+      enabled: true
+```
+
+Equivalente sem a meta-anotação:
+
+```java
+@EnableJpaRepositories(
+    repositoryFactoryBeanClass = FluentQueryJpaRepositoryFactoryBean.class,
+    repositoryBaseClass = FluentQueryJpaRepository.class)
+```
+
+### Exemplo de listener
+
+```java
+@Component
+class UserLifecycle extends AbstractEntityLifecycleListener<User> {
+
+    @Override
+    public void onCreated(User user) {
+        // após o insert
+    }
+
+    @Override
+    public void onUpdating(User user) {
+        // antes do update — estado atual
+    }
+
+    @Override
+    public void onDeleted(User user) {
+        // após o delete
+    }
+}
+```
+
+`AbstractEntityLifecycleListener` resolve `entityType()` a partir do genérico. O match é **exato** (listener de `User` não roda para subclasse).
+
+### Ordem dos hooks
+
+- **Save (novo):** `onSaving` → `onCreating` → persist → `onCreated` → `onSaved`
+- **Save (existente):** `onSaving` → `onUpdating` → merge → `onUpdated` → `onSaved`
+- **Delete:** `onDeleting` → remove → `onDeleted`
+- **`saveAll` / `deleteAll` / `deleteById` / `query().delete()`:** por entidade
+- **`deleteAllInBatch` / `deleteInBatch` / `deleteAllByIdInBatch`:** sem hooks (JPQL batch)
+
+O starter sempre registra um bean `EntityLifecycleRegistry`. Com `lifecycle.enabled=false` (default), o dispatch é no-op mesmo com o factory bean ligado.
+
+`save` / `delete` são `@Transactional`: falha em um pre-hook (ex. `onCreating`) aborta persist/remove e faz rollback quando chamado via proxy Spring do repositório. `IllegalStateException` / `IllegalArgumentException` dos hooks são relançadas como `FluentQueryLifecycleException` para o Spring Data não as reescrever como `InvalidDataAccessApiUsageException`.
 
 <a id="guia-de-uso"></a>
 ## Guia de uso
@@ -574,8 +653,8 @@ Ative a geração do metamodelo no host (annotation processor / Hibernate JPamod
 
 | Método | Uso | Com `page` / `slice` / `paginate` / `chunk` |
 |--------|-----|---------------------------------------------|
-| `fetch("profile")` | To-one (`@ManyToOne` / `@OneToOne`) | ✅ Seguro |
-| `fetchCollection("orders")` | To-many (`@OneToMany` / `@ManyToMany`) | ❌ Lança `IllegalStateException` |
+| `fetch("profile")` / `fetch(path, f -> …)` / `with(...)` | To-one; overload com `Consumer` = constraints em `ON` | ✅ Seguro |
+| `fetchCollection("orders")` / `fetchCollection(path, f -> …)` / `withCollection(...)` | To-many; overload com `Consumer` = `ON` | ❌ Lança `IllegalStateException` |
 | `select("id", "email")` | Projeção de propriedades (`project`); preferível com `*As` | ✅ |
 | `distinct()` | Forçar DISTINCT | ✅ |
 | `limit(n)` | Teto de linhas em `get()` / `limit` do Spring | Aplicado via pageable quando útil |
@@ -588,6 +667,7 @@ import org.springframework.data.domain.PageRequest;
 Page<User> page = userRepository.query()
         .where("active", true)
         .fetch("status")                 // só to-one
+        .fetch("profile.address")        // path aninhado to-one
         .orderByDesc("createdAt")
         .page(PageRequest.of(0, 20));
 ```
@@ -603,17 +683,67 @@ userRepository.query()
 
 Prefira carregar coleções em uma **segunda query**, ou use `get()` / `first()` sem paginação quando realmente precisar de fetch de coleção.
 
+Com `fetchCollection`, `first()` / `one()` / `latest()` **não** aplicam `LIMIT` SQL: carregam raízes (com sort) e escolhem em memória, para não truncar o produto do JOIN antes do DISTINCT. Mantenha o `where*` seletivo.
+
+#### `fetch` / `fetchCollection` com constraints (Eloquent `with`)
+
+A API canônica é sobre **`fetch`**. `with` / `withCollection` são aliases de nome Eloquent.
+
+```java
+// to-one: LEFT JOIN FETCH + ON na folha
+.query()
+    .fetch("profile", f -> f.where("active", true))
+    .fetch("company.address", f -> f.whereNotNull("city"))
+    .first();
+
+// misturar plain + constrained — preferir FetchRel (sem nulls)
+.query().fetch(
+        FetchRel.of("rel1.rel2", f -> f.where("active", true)),
+        FetchRel.of("rel3"),
+        FetchRel.of("rel4", f -> f.whereNotNull("code"))
+).first();
+
+// alternativa Map: valor null = fetch plain (LinkedHashMap se a ordem importa)
+Map<String, Consumer<RelatedFilter>> rels = new LinkedHashMap<>();
+rels.put("rel3", null);
+rels.put("rel1.rel2", f -> f.where("active", true));
+.query().fetch(rels);
+
+// coleções (mesmas regras: sem page/limit)
+.query()
+    .fetchCollection("books", f -> f.whereGt("pages", 100))
+    .get();   // preferível com vários filhos matched
+
+.query().fetchCollection(
+        FetchRel.of("books", f -> f.whereGt("pages", 100)),
+        FetchRel.of("tags")
+);
+
+// aliases Eloquent
+.query().with(
+        FetchRel.of("rel1.rel2", f -> f.where("active", true)),
+        FetchRel.of("rel3")
+);
+```
+
+Importante:
+
+- Constraints em `ON` (não `WHERE`) — o pai é mantido. Para filtrar raízes use `whereHas` / `whereRelated*`.
+- To-one vs coleção separado (`fetch` vs `fetchCollection`); o mesmo path em ambos lança.
+- Um `fetch("path")` plain **depois** de um constrained limpa o `ON` desse path.
+- Coleção filtrada = vista **parcial** em memória. **Não** faça `save()` da raiz se a associação tem `orphanRemoval` / cascade remove: o JPA pode apagar filhos não carregados. Use a coleção filtrada só para leitura, ou recarregue completa antes de mutar.
+
 <a id="terminais"></a>
 ### Terminais
 
 | Terminal | Resultado | Notas |
 |----------|-----------|-------|
-| `first()` | `Optional<T>` | Primeiro match (`LIMIT 1`); OK se houver vários; **sem COUNT** |
+| `first()` | `Optional<T>` | Primeiro match (`LIMIT 1`); com `fetchCollection` sem LIMIT SQL (pick em memória); **sem COUNT** |
 | `firstOrFail()` | `T` | Lança `FluentQueryNotFoundException` se vazio (açúcar opcional) |
 | `firstOrNull()` | `T` ou `null` | |
 | `latest(property)` | `Optional<T>` | `orderByDesc` + `first` |
 | `oldest(property)` | `Optional<T>` | `orderByAsc` + `first` |
-| `one()` | `Optional<T>` | Espera 0–1 linha; Spring Data lança se houver **2+** |
+| `one()` | `Optional<T>` | Espera 0–1 raiz; lança `IncorrectResultSizeDataAccessException` se houver **2+** (também com `fetchCollection`) |
 | `oneOrFail()` | `T` | Lança `FluentQueryNotFoundException` se vazio (açúcar opcional) |
 | `get()` | `List<T>` | Respeita `limit`; sem limit pode carregar a tabela inteira |
 | `page(pageable)` | `Page<T>` | Com COUNT; sem `fetchCollection` |
@@ -733,6 +863,21 @@ Page<UserSummary> page = userRepository.query()
 
 Também: `select(User_.id, User_.email)` se o metamodelo estático estiver disponível.
 
+Shorthand de associação (só em `select` / projeção — **não** em `fetch`). Tokens como `assoc:col1,col2` são expandidos por `SelectPaths` (`dev.benjaminor.fluentquery.support.SelectPaths`) antes do `project` do Spring Data:
+
+```java
+// Equivale a select("status.id", "status.name", "profile.address.city")
+userRepository.query()
+        .where("active", true)
+        .select("status:id,name", "profile.address:city")
+        .getAs(UserSummary.class);
+```
+
+`fetch("status:id,name")` lança `IllegalArgumentException`: o JPA não pode JOIN FETCH um estado parcial de entidade de forma segura. Use `fetch("status")` para eager completo, ou `select(…).getAs(…)` para colunas leves.
+
+Base JPA opcional (sem colunas de auditoria hardcoded): `dev.benjaminor.fluentquery.jpa.MapsIdPersistable`
+para entities `@MapsId` + Spring Data `Persistable`. O host define `createdAt` / nomes de coluna locais no próprio `@MappedSuperclass`.
+
 <a id="specifications-tipadas"></a>
 ### Specifications tipadas
 
@@ -775,6 +920,22 @@ Opções avançadas:
 
 - Implementar só `PropertyFilters` em um repositório custom
 - Chamar `FluentQuery.of(executor)` (sem filtros ricos) ou `FluentQuery.of(executor, filters)` manualmente
+
+<a id="helpers-values"></a>
+## Helpers `Values`
+
+`dev.benjaminor.fluentquery.support.Values` — helpers estáticos pequenos usados pelo Fluent Query (e disponíveis no host) para checagens blank/empty e normalização de texto. Espaços Unicode (incluindo NBSP) contam como blank.
+
+| Método | Retorna |
+|--------|---------|
+| `isBlank(String)` / `hasText(String)` | blank / não blank (`null`, vazio ou só espaços Unicode) |
+| `trimToNull(String)` | texto stripado, ou `null` se blank |
+| `trimToEmpty(String)` | texto stripado, ou `""` (nunca `null`) |
+| `trimToNullUpper(String)` | `trimToNull` e depois upper-case (`Locale.ROOT`) |
+| `isEmpty` / `isNotEmpty` | `Collection`, `Map` ou array — `null` ou vazio |
+| `isNull` / `isNotNull` | checagens de referência null |
+| `requireText(String, message)` | o valor, ou `IllegalArgumentException` se blank |
+| `defaultIfNull(T, T)` | o valor ou um fallback non-null |
 
 <a id="compatibilidade-boot-3-4"></a>
 ## Compatibilidade Boot 3.x / 4.x
@@ -843,7 +1004,7 @@ mvn -pl spring-fluent-query-example spring-boot:run
 
 Na inicialização executa um fluxo completo **Create / Read / Update / Delete** com [`DemoCrudService`](spring-fluent-query-example/src/main/java/dev/benjaminor/fluentquery/example/DemoCrudService.java) (ver logs).
 
-O módulo example também inclui cobertura H2 `@DataJpaTest` ([`FluentQueryDataJpaIT`](spring-fluent-query-example/src/test/java/dev/benjaminor/fluentquery/example/it/FluentQueryDataJpaIT.java)) para `whereHas` aninhado, extratos de data, `whereColumn`, `whereNotBetween`, `orWhereHas`, `whereRelation`, `unless`, `firstOrFail` / `oneOrFail`, `paginate`, `select` + `firstAs`, optionals, `delete()` e rejeição de `fetchCollection` + `page`.
+O módulo example também inclui cobertura H2 `@SpringBootTest (H2 IT)` ([`FluentQueryDataJpaIT`](spring-fluent-query-example/src/test/java/dev/benjaminor/fluentquery/example/it/FluentQueryDataJpaIT.java)) para `whereHas` aninhado, extratos de data, `whereColumn`, `whereNotBetween`, `orWhereHas`, `whereRelation`, `unless`, `firstOrFail` / `oneOrFail`, `paginate`, `select` + `firstAs`, optionals, `delete()`, rejeição de `fetchCollection` + `page`, e `fetchCollection` constrained com **vários** filhos matched via `get()` / `first()`.
 
 <a id="solucao-de-problemas"></a>
 ## Solução de problemas
@@ -852,9 +1013,13 @@ O módulo example também inclui cobertura H2 `@DataJpaTest` ([`FluentQueryDataJ
 
 Estenda `FluentQueryRepository<Entity, Id>` (não só `JpaRepository`). Um `extends` basta — não é preciso uma segunda interface para `PropertyFilters`.
 
-### `fetchCollection` + `page` / `slice` / `paginate` / `chunk` lança
+### `fetchCollection` + `page` / `slice` / `paginate` / `chunk` / `limit` lança
 
-Esperado: fetch de coleção com paginação é inseguro (produto cartesiano / COUNT incorreto). Use `fetch()` para to-one, ou carregue coleções em uma segunda query.
+Esperado: o fetch de coleção com paginação ou `limit()` é inseguro (produto cartesiano / COUNT ou LIMIT sobre o join). Use `fetch()` para to-one, `get()` / `first()` sem `limit`, ou carregue coleções em uma segunda query.
+
+### Coleção filtrada + `orphanRemoval`
+
+`fetchCollection(path, f -> …)` deixa só os filhos que cumprem o `ON`. Se a associação tem `orphanRemoval = true` e você salva a raiz, o Hibernate pode eliminar os filhos ausentes na coleção. Trate essa carga como **somente leitura**, ou recarregue sem filtro antes de mutar/salvar.
 
 ### `get()` é lento / OOM
 
@@ -919,9 +1084,11 @@ Garanta que você usa o starter publicado (arquivo de imports em `META-INF/sprin
 
 | Método | Descrição |
 |--------|-----------|
-| `fetch` | LEFT JOIN FETCH to-one; ativa DISTINCT |
-| `fetchCollection` | LEFT JOIN FETCH to-many; **não** com page/slice/paginate/chunk |
-| `select` | Projeção de propriedades estilo Eloquent (`project`); melhor com `*As` |
+| `fetch` / `with` | LEFT JOIN FETCH to-one; `fetch(path, f -> …)` = `ON`; **não** admite `:` |
+| `fetchCollection` / `withCollection` | LEFT JOIN FETCH to-many; `fetchCollection(path, f -> …)` = `ON`; **não** com page/slice/paginate/chunk/**limit**; `first`/`one` sem LIMIT SQL; vista parcial — cuidado com `orphanRemoval`; **não** admite `:` |
+| `FetchRel` | Spec tipado plain/constrained para batch `fetch`/`fetchCollection` (preferível a `Map` com nulls) |
+| `whereHas` / `whereRelation` / `whereRelated*` | Associação ou path aninhado (`company.address`); predicados na folha |
+| `select` | Projeção (`project`); shorthand `assoc:col1,col2` via `SelectPaths`; melhor com `*As` |
 | `distinct` | Forçar DISTINCT |
 | `limit` | Máximo de linhas em terminais de lista |
 | `orderByAsc` / `orderByDesc` / `orderBy` | Ordenação |
@@ -987,7 +1154,7 @@ Os releases são publicados no Maven Central — ver [PUBLISHING.md](PUBLISHING.
 ## Roadmap
 
 - Módulo example mais rico (REST + queries de amostra)
-- `autoPublish=true` no Central Portal quando a automação de release estiver estável
+- Match por herança opcional em listeners de lifecycle (hoje só tipo exato)
 
 <a id="licenca"></a>
 ## Licença

@@ -1,6 +1,7 @@
 package dev.benjaminor.fluentquery.support;
 
 import java.util.Collection;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
@@ -10,6 +11,9 @@ import java.util.Objects;
  *
  * <p>Goal: avoid repeating {@code x == null || x.isBlank()} in filters and builders.
  * Does not emulate JavaScript-style emptiness (e.g. {@code Boolean.FALSE} is not empty).
+ *
+ * <p>{@link #trimToNull(String)} / {@link #trimToEmpty(String)} use {@link String#strip()}
+ * so they agree with {@link #isBlank(String)} on Unicode whitespace (e.g. NBSP).
  *
  * <ul>
  *   <li>Input strings → {@link #isBlank(String)}, {@link #trimToNull(String)}, {@link #hasText(String)}</li>
@@ -50,59 +54,87 @@ public final class Values {
     // ---- String ----
 
     /**
-     * {@code true} if the string is {@code null}, empty, or only whitespace
-     * ({@link String#isBlank()}).
+     * {@code true} if the string is {@code null}, empty, or only Unicode spaces.
+     * Uses both {@link Character#isWhitespace(int)} and {@link Character#isSpaceChar(int)}
+     * so NBSP ({@code U+00A0}) and similar are treated as blank (unlike {@link String#isBlank()} alone).
      *
      * @param value maybe-null string
      * @return whether the string is blank
      */
     public static boolean isBlank(String value) {
-        return value == null || value.isBlank();
+        if (value == null || value.isEmpty()) {
+            return true;
+        }
+        return value.codePoints().allMatch(Values::isUnicodeSpace);
     }
 
     /**
      * Inverse of {@link #isBlank(String)}.
      *
      * @param value maybe-null string
-     * @return whether the string has non-whitespace content
+     * @return whether the string has non-space content
      */
     public static boolean hasText(String value) {
         return !isBlank(value);
     }
 
     /**
-     * Trims and converts blank to {@code null}. Useful so optional filters can skip the predicate.
+     * Strips Unicode spaces (same rules as {@link #isBlank(String)}) and converts blank to {@code null}.
      *
      * @param value maybe-null string
-     * @return trimmed text, or {@code null} if blank
+     * @return stripped text, or {@code null} if blank
      */
     public static String trimToNull(String value) {
         if (value == null) {
             return null;
         }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
+        int start = 0;
+        int end = value.length();
+        while (start < end) {
+            int cp = value.codePointAt(start);
+            if (!isUnicodeSpace(cp)) {
+                break;
+            }
+            start += Character.charCount(cp);
+        }
+        while (end > start) {
+            int cp = value.codePointBefore(end);
+            if (!isUnicodeSpace(cp)) {
+                break;
+            }
+            end -= Character.charCount(cp);
+        }
+        if (start >= end) {
+            return null;
+        }
+        return value.substring(start, end);
     }
 
     /**
-     * Trims; {@code null} or blank → {@code ""}. Never returns {@code null}.
+     * Strips Unicode spaces; {@code null} or blank → {@code ""}. Never returns {@code null}.
      *
      * @param value maybe-null string
-     * @return trimmed string, never {@code null}
+     * @return stripped string, never {@code null}
      */
     public static String trimToEmpty(String value) {
-        return value == null ? "" : value.trim();
+        String trimmed = trimToNull(value);
+        return trimmed == null ? "" : trimmed;
+    }
+
+    private static boolean isUnicodeSpace(int codePoint) {
+        return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
     }
 
     /**
-     * {@link #trimToNull(String)} then {@link String#toUpperCase()} (default locale).
+     * {@link #trimToNull(String)} then {@link String#toUpperCase(Locale)} with
+     * {@link Locale#ROOT} (locale-neutral; avoids Turkish {@code i}/{@code I} surprises).
      *
      * @param value maybe-null string
-     * @return upper-cased trimmed text, or {@code null} if blank
+     * @return upper-cased stripped text, or {@code null} if blank
      */
     public static String trimToNullUpper(String value) {
         String trimmed = trimToNull(value);
-        return trimmed == null ? null : trimmed.toUpperCase();
+        return trimmed == null ? null : trimmed.toUpperCase(Locale.ROOT);
     }
 
     // ---- Collection / Map / array ----
