@@ -6,6 +6,7 @@
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.x%20%7C%204.x-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
 [![Spring Data JPA](https://img.shields.io/badge/Spring%20Data%20JPA-3.x%20%7C%204.x-6DB33F?logo=spring&logoColor=white)](https://spring.io/projects/spring-data-jpa)
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.benjaminor-dev/spring-fluent-query-spring-boot-starter?label=Maven%20Central)](https://search.maven.org/artifact/io.github.benjaminor-dev/spring-fluent-query-spring-boot-starter)
+[![JetBrains Plugin](https://img.shields.io/jetbrains/plugin/v/33175.svg?label=IntelliJ%20plugin)](https://plugins.jetbrains.com/plugin/33175-spring-fluent-query)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 Consultas fluidas **estilo Eloquent** sobre **Spring Data JPA Specifications**, sin Active Record.
@@ -32,6 +33,17 @@ Spring Fluent Query añade una cadena legible (`where` → `fetch` → `latest` 
 - LIKE portable por defecto (`UPPER` + `LIKE`); modo Oracle unaccent opcional
 - Hooks opcionales de ciclo de vida estilo Eloquent (beans Spring — sin Active Record)
 - Core usable sin el starter de Boot (`spring-fluent-query-core`)
+
+**Plugin IntelliJ:** instala [Spring Fluent Query](https://plugins.jetbrains.com/plugin/33175-spring-fluent-query) desde el JetBrains Marketplace para autocomplete e inspecciones de paths en string (`where`, `fetch`, `select`, `whereHas`, …). Código: [spring-fluent-query-intellij](https://github.com/BenjaminOR-dev/spring-fluent-query-intellij).
+
+Proyectos hermanos:
+
+| Proyecto | Rol |
+|----------|-----|
+| **spring-fluent-query** (este repo) | Queries fluidas en runtime (Maven) |
+| [spring-fluent-query-intellij](https://github.com/BenjaminOR-dev/spring-fluent-query-intellij) | DX de IDE para paths en string ([Marketplace](https://plugins.jetbrains.com/plugin/33175-spring-fluent-query)) |
+| [spring-fluent-map](https://github.com/BenjaminOR-dev/spring-fluent-map) | Mapeo entidad → DTO |
+| [spring-validation-plus](https://github.com/BenjaminOR-dev/spring-validation-plus) | Validación de DTOs |
 
 <a id="por-que-usar-fluent-query"></a>
 ## ¿Por qué usar Fluent Query?

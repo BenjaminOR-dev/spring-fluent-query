@@ -6,6 +6,7 @@
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.x%20%7C%204.x-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
 [![Spring Data JPA](https://img.shields.io/badge/Spring%20Data%20JPA-3.x%20%7C%204.x-6DB33F?logo=spring&logoColor=white)](https://spring.io/projects/spring-data-jpa)
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.benjaminor-dev/spring-fluent-query-spring-boot-starter?label=Maven%20Central)](https://search.maven.org/artifact/io.github.benjaminor-dev/spring-fluent-query-spring-boot-starter)
+[![JetBrains Plugin](https://img.shields.io/jetbrains/plugin/v/33175.svg?label=IntelliJ%20plugin)](https://plugins.jetbrains.com/plugin/33175-spring-fluent-query)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 **Eloquent-style** fluent queries on top of **Spring Data JPA Specifications** — without Active Record.
@@ -32,6 +33,17 @@ Spring Fluent Query adds a readable chain (`where` → `fetch` → `latest` / `f
 - Portable LIKE by default (`UPPER` + `LIKE`); optional Oracle unaccent mode
 - Optional Eloquent-style entity lifecycle hooks (Spring beans — not Active Record)
 - Core usable without the Boot starter (`spring-fluent-query-core`)
+
+**IntelliJ plugin:** install [Spring Fluent Query](https://plugins.jetbrains.com/plugin/33175-spring-fluent-query) from the JetBrains Marketplace for autocomplete and inspections on string paths (`where`, `fetch`, `select`, `whereHas`, …). Source: [spring-fluent-query-intellij](https://github.com/BenjaminOR-dev/spring-fluent-query-intellij).
+
+Companion projects:
+
+| Project | Role |
+|---------|------|
+| **spring-fluent-query** (this repo) | Runtime fluent queries (Maven) |
+| [spring-fluent-query-intellij](https://github.com/BenjaminOR-dev/spring-fluent-query-intellij) | IDE DX for string paths ([Marketplace](https://plugins.jetbrains.com/plugin/33175-spring-fluent-query)) |
+| [spring-fluent-map](https://github.com/BenjaminOR-dev/spring-fluent-map) | Entity → DTO mapping |
+| [spring-validation-plus](https://github.com/BenjaminOR-dev/spring-validation-plus) | DTO validation |
 
 <a id="why-use-fluent-query"></a>
 ## Why use Fluent Query?
