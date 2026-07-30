@@ -14,7 +14,7 @@ import java.util.List;
  *       {@code company.address.id}, {@code company.address.city}</li>
  * </ul>
  *
- * <p>This is for {@code select}/{@code getAs} projections — not for {@code fetch}
+ * <p>This is for {@code select}/{@code get(Class)} projections — not for {@code fetch}
  * (JPA cannot JOIN FETCH a partial entity state safely).
  */
 public final class SelectPaths {

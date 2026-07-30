@@ -29,7 +29,7 @@ Spring Fluent Query adiciona uma cadeia legível (`where` → `fetch` → `lates
 - Carga eager: `fetch` / `with` (to-one) e `fetchCollection` / `withCollection` (to-many; constraints estilo Eloquent via `ON`)
 - Projeção de colunas: `select(...)` (Spring Data `project`; preferível com `*As`)
 - Paginação: `page` / `slice` / `paginate` / `chunk`
-- Terminais: `first` / `firstOrFail` / `latest` / `oldest` / `one` / `oneOrFail` / `get` / `stream` / `exists` / `count` (+ `*OrNull` / `*As`)
+- Terminais: `first` / `firstOrFail` / `latest` / `oldest` / `one` / `oneOrFail` / `get` / `stream` / `exists` / `count` (+ `*OrNull` / `*As` / `*AsOrFail`)
 - LIKE portátil por padrão (`UPPER` + `LIKE`); modo Oracle unaccent opcional
 - Hooks opcionais de ciclo de vida estilo Eloquent (beans Spring — sem Active Record)
 - Core utilizável sem o starter do Boot (`spring-fluent-query-core`)
@@ -90,6 +90,7 @@ Você ainda pode misturar `Specification` tipados com helpers de coluna string n
   - [Terminais](#terminais)
   - [Paginação e chunking](#paginacao-e-chunking)
   - [Projeções (`as`) e `select`](#projecoes-as-e-select)
+    - [Entidade vs projeção vs mapeamento](#entidade-vs-projecao)
   - [Specifications tipadas](#specifications-tipadas)
 - [PropertyFilters](#propertyfilters)
 - [Helpers `Values`](#helpers-values)
@@ -837,8 +838,36 @@ Usa `SpecificationFluentQuery.as(Class)` do Spring Data — projeções interfac
 
 | Combinação | O que você obtém |
 |------------|------------------|
-| `select(...).getAs(Projection.class)` | **Preferido** — limita propriedades projetadas (SQL mais leve em interface/DTO) |
-| `select(...).get()` (entidade) | Aplica regras `project` / EntityGraph do Spring Data; JPA **não** pode devolver uma “entidade parcial” como o Eloquent |
+| `select(...).first(Projection.class)` | Primeiro match projetado (`LIMIT 1`) |
+| `select(...).firstOrFail(Projection.class)` | Igual; lança `FluentQueryNotFoundException` se vazio |
+| `select(...).firstOrNull(Projection.class)` | Igual; `null` se vazio |
+| `select(...).one(Projection.class)` | Exatamente 0–1; lança se houver 2+ |
+| `select(...).oneOrFail(Projection.class)` | Igual; lança se vazio |
+| `select(...).oneOrNull(Projection.class)` | Igual; `null` se vazio |
+| `select(...).latest("col", Projection.class)` | `orderByDesc` + `first(Class)` |
+| `select(...).latestOrFail` / `latestOrNull` | Variantes fail / null |
+| `select(...).oldest("col", Projection.class)` | `orderByAsc` + `first(Class)` |
+| `select(...).oldestOrFail` / `oldestOrNull` | Variantes fail / null |
+| `select(...).get(Projection.class)` | **Lista** — SQL mais leve (interface/DTO) |
+| `select(...).page(pageable, Projection.class)` | Página projetada com COUNT (Class por último) |
+| `select(...).paginate(page, size, Projection.class)` | Alias 0-based de `page` |
+| `select(...).slice(pageable, Projection.class)` | Slice projetado **sem** COUNT |
+| `select(...).get()` (entidade) | `project` / EntityGraph; JPA **não** pode devolver entidade parcial |
+
+Os nomes `*As` (`firstAs`, `getAs`, …) permanecem como aliases deprecados.
+
+
+<a id="entidade-vs-projecao"></a>
+#### Entidade vs projeção vs mapeamento (evitar ciclos JSON)
+
+| Você precisa… | Use |
+|---------------|-----|
+| Mutar / salvar / auditoria | Entidade: `first()` / `one()` / `oneOrFail()` (+ `fetch` se precisar) |
+| Resposta HTTP só com colunas | `select(…).oneOrFail(Projection.class)` (ou `first` / `latest`…) |
+| Mutar e depois responder outro shape | Entidade no service → **FluentMap** / DTO ao montar `data` |
+| Filtrar por relação sem carregar o grafo | `whereHas(…).exists()` / `.count()` (predicados, não `fetch`) |
+
+Não misture `fetch(…)` com um `Class` de projeção: projeções ignoram join-fetch e FluentQuery lança. Não coloque entidades JPA bidirecionais no JSON da API (Jackson percorre back-refs → ciclo).
 
 Se quiser um nome personalizado no resultado, exponha-o no tipo de projeção e deixe o `select` com o caminho do atributo da entidade:
 
@@ -859,18 +888,28 @@ public interface UserSummary {
 Optional<UserSummary> first = userRepository.query()
         .where("active", true)
         .select("id", "email")
-        .firstAs(UserSummary.class);
+        .first(UserSummary.class);
+
+UserSummary required = userRepository.query()
+        .where("id", id)
+        .select("id", "email")
+        .oneOrFail(UserSummary.class);
+
+Optional<UserSummary> latest = userRepository.query()
+        .where("active", true)
+        .select("id", "email")
+        .latest("createdAt", UserSummary.class);
 
 List<UserSummary> all = userRepository.query()
         .whereLike("email", "@example.com")
         .select(List.of("id", "email"))
         .limit(100)
-        .getAs(UserSummary.class);
+        .get(UserSummary.class);
 
 Page<UserSummary> page = userRepository.query()
         .select("id", "email")
         .orderByDesc("createdAt")
-        .pageAs(UserSummary.class, PageRequest.of(0, 20));
+        .page(PageRequest.of(0, 20), UserSummary.class);
 ```
 
 Também: `select(User_.id, User_.email)` se o metamodelo estático estiver disponível.
@@ -882,10 +921,10 @@ Shorthand de associação (só em `select` / projeção — **não** em `fetch`)
 userRepository.query()
         .where("active", true)
         .select("status:id,name", "profile.address:city")
-        .getAs(UserSummary.class);
+        .get(UserSummary.class);
 ```
 
-`fetch("status:id,name")` lança `IllegalArgumentException`: o JPA não pode JOIN FETCH um estado parcial de entidade de forma segura. Use `fetch("status")` para eager completo, ou `select(…).getAs(…)` para colunas leves.
+`fetch("status:id,name")` lança `IllegalArgumentException`: o JPA não pode JOIN FETCH um estado parcial de entidade de forma segura. Use `fetch("status")` para eager completo, ou `select(…).get(…)` para colunas leves.
 
 Base JPA opcional (sem colunas de auditoria hardcoded): `dev.benjaminor.fluentquery.jpa.MapsIdPersistable`
 para entities `@MapsId` + Spring Data `Persistable`. O host define `createdAt` / nomes de coluna locais no próprio `@MappedSuperclass`.
@@ -1016,7 +1055,9 @@ mvn -pl spring-fluent-query-example spring-boot:run
 
 Na inicialização executa um fluxo completo **Create / Read / Update / Delete** com [`DemoCrudService`](spring-fluent-query-example/src/main/java/dev/benjaminor/fluentquery/example/DemoCrudService.java) (ver logs).
 
-O módulo example também inclui cobertura H2 `@SpringBootTest (H2 IT)` ([`FluentQueryDataJpaIT`](spring-fluent-query-example/src/test/java/dev/benjaminor/fluentquery/example/it/FluentQueryDataJpaIT.java)) para `whereHas` aninhado, extratos de data, `whereColumn`, `whereNotBetween`, `orWhereHas`, `whereRelation`, `unless`, `firstOrFail` / `oneOrFail`, `paginate`, `select` + `firstAs`, optionals, `delete()`, rejeição de `fetchCollection` + `page`, e `fetchCollection` constrained com **vários** filhos matched via `get()` / `first()`.
+Também expõe **`GET /api/demos/{id}`** ([`DemoApiController`](spring-fluent-query-example/src/main/java/dev/benjaminor/fluentquery/example/DemoApiController.java)) que responde com projeção `select(…).oneOrFail(DemoSummary.class)` — exemplo de API sem devolver a entidade JPA.
+
+O módulo example também inclui cobertura H2 `@SpringBootTest (H2 IT)` ([`FluentQueryDataJpaIT`](spring-fluent-query-example/src/test/java/dev/benjaminor/fluentquery/example/it/FluentQueryDataJpaIT.java)) para `whereHas` aninhado, extratos de data, `whereColumn`, `whereNotBetween`, `orWhereHas`, `whereRelation`, `unless`, `firstOrFail` / `oneOrFail`, `paginate` / `paginate(…, Class)` / `slice(…, Class)`, `select` + `first` / `one` / `latest` / `oldest` (Class), optionals, `delete()`, rejeição de `fetchCollection` + `page`, e `fetchCollection` constrained com **vários** filhos matched via `get()` / `first()`.
 
 <a id="solucao-de-problemas"></a>
 ## Solução de problemas
@@ -1054,7 +1095,7 @@ Os `whereLike` / `whereContains` / `whereStartsWith` / `whereEndsWith` / `whereL
 
 ### Nomes personalizados em projeções
 
-Se precisar de um nome personalizado no resultado da API, defina-o na interface/DTO de projeção e faça `select` do caminho do atributo da entidade (p. ex. `select("email").getAs(UserSummary.class)` com `getEmailPersonalizado()` / o mapeamento correspondente).
+Se precisar de um nome personalizado no resultado da API, defina-o na interface/DTO de projeção e faça `select` do caminho do atributo da entidade (p. ex. `select("email").get(UserSummary.class)` com `getEmailPersonalizado()` / o mapeamento correspondente).
 
 ### A auto-config não roda no Boot 4
 
@@ -1120,8 +1161,8 @@ Garanta que você usa o starter publicado (arquivo de imports em `META-INF/sprin
 | `slice` | Slice sem COUNT |
 | `chunk` | Batch via slice |
 | `stream` | Stream closable |
-| `firstAs` / `getAs` / `pageAs` | Projeções |
-| `exists` / `count` | Agregados sem fetch |
+| `first`/`one`/`latest`/`oldest`/`get`/`page`/`paginate`/`slice` + `Class` (e `*As` deprecados) | Projeções |
+| `exists` / `count` | Agregados sem fetch (compatíveis com `whereHas`) |
 | `delete` | Apaga linhas correspondentes (`CrudRepository#deleteAll`) |
 | `toSpecification` / `toSelectSpecification` / `toSort` | Inspecionar composição |
 

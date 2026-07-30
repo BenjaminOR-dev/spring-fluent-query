@@ -26,7 +26,7 @@ import java.util.function.Consumer;
  * }</pre>
  *
  * <p>Column lists ({@code "rel:id,name"}) are <b>not</b> allowed — JOIN FETCH loads the full
- * association; use root {@code select(...).getAs(...)} for lean projections.
+ * association; use root {@code select(...).get(...)} for lean projections.
  *
  * @param path        association path (may be dotted; constraints apply to the leaf)
  * @param constraints related {@code ON} predicates; {@code null} = plain fetch
@@ -61,7 +61,7 @@ public record FetchRel(String path, Consumer<RelatedFilter> constraints) {
             throw new IllegalArgumentException(
                     "FetchRel path must not contain ':' (got '" + path + "'). "
                             + "JOIN FETCH loads the full association; use select(\"assoc:col1,col2\") "
-                            + "with getAs/firstAs for column projections.");
+                            + "with get(Class)/first(Class) for column projections.");
         }
     }
 

@@ -1,10 +1,14 @@
 package dev.benjaminor.fluentquery;
 
 /**
- * Thrown by {@link FluentQuery#firstOrFail()} / {@link FluentQuery#oneOrFail()} when no row matches.
+ * Thrown by {@code *OrFail} terminals ({@link FluentQuery#firstOrFail()},
+ * {@link FluentQuery#oneOrFail()}, {@link FluentQuery#firstOrFail(Class)},
+ * {@link FluentQuery#oneOrFail(Class)}, {@link FluentQuery#latestOrFail(String, Class)},
+ * {@link FluentQuery#oldestOrFail(String, Class)}, …)
+ * when no row matches.
  *
  * <p>Optional sugar — hosts can keep using {@link FluentQuery#first()} / {@link FluentQuery#one()}
- * with {@link java.util.Optional} instead.
+ * / {@link FluentQuery#first(Class)} with {@link java.util.Optional} instead.
  */
 public class FluentQueryNotFoundException extends RuntimeException {
 

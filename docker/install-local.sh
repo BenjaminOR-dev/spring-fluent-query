@@ -10,5 +10,5 @@ cd "$ROOT_DIR"
 docker compose run --rm maven mvn clean install -DskipTests -Dgpg.skip=true
 
 echo ""
-echo "Listo. Puedes usar io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:${PROJECT_VERSION:-0.2.0}"
+echo "Listo. Puedes usar io.github.benjaminor-dev:spring-fluent-query-spring-boot-starter:${PROJECT_VERSION:-0.2.1}"
 echo "desde tu app local apuntando al .m2 del volumen Docker o instalando también en ~/.m2."

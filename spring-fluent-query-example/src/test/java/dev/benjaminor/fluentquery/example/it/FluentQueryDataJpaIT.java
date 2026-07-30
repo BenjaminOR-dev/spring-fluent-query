@@ -364,11 +364,108 @@ class FluentQueryDataJpaIT {
         AuthorName projected = authors.query()
                 .where("name", "Ada")
                 .select("id", "name")
-                .firstAs(AuthorName.class)
+                .first(AuthorName.class)
                 .orElseThrow();
 
         assertThat(projected.getName()).isEqualTo("Ada");
         assertThat(projected.getId()).isNotNull();
+    }
+
+    @Test
+    void one_and_firstOrFail_and_latest_withProjectionClass() {
+        Author ada = new Author();
+        ada.setName("Ada");
+        ada.setScore(10);
+        authors.save(ada);
+
+        Author grace = new Author();
+        grace.setName("Grace");
+        grace.setScore(20);
+        authors.save(grace);
+
+        interface AuthorName {
+            Long getId();
+            String getName();
+        }
+
+        AuthorName one = authors.query()
+                .where("name", "Ada")
+                .select("id", "name")
+                .one(AuthorName.class)
+                .orElseThrow();
+        assertThat(one.getName()).isEqualTo("Ada");
+
+        AuthorName firstFail = authors.query()
+                .where("name", "Ada")
+                .select("id", "name")
+                .firstOrFail(AuthorName.class);
+        assertThat(firstFail.getName()).isEqualTo("Ada");
+
+        assertThatThrownBy(() -> authors.query()
+                        .where("name", "Missing")
+                        .select("id", "name")
+                        .oneOrFail(AuthorName.class))
+                .isInstanceOf(FluentQueryNotFoundException.class);
+
+        AuthorName latest = authors.query()
+                .select("id", "name")
+                .latest("score", AuthorName.class)
+                .orElseThrow();
+        assertThat(latest.getName()).isEqualTo("Grace");
+
+        AuthorName latestFail = authors.query()
+                .select("id", "name")
+                .latestOrFail("score", AuthorName.class);
+        assertThat(latestFail.getName()).isEqualTo("Grace");
+
+        AuthorName oldest = authors.query()
+                .select("id", "name")
+                .oldestOrFail("score", AuthorName.class);
+        assertThat(oldest.getName()).isEqualTo("Ada");
+
+        assertThat(authors.query()
+                        .where("name", "Missing")
+                        .select("id", "name")
+                        .firstOrNull(AuthorName.class))
+                .isNull();
+
+        var page = authors.query()
+                .select("id", "name")
+                .orderByAsc("name")
+                .paginate(0, 10, AuthorName.class);
+        assertThat(page.getContent()).extracting(AuthorName::getName)
+                .containsExactly("Ada", "Grace");
+
+        var slice = authors.query()
+                .select("id", "name")
+                .orderByAsc("name")
+                .slice(PageRequest.of(0, 10), AuthorName.class);
+        assertThat(slice.getContent()).extracting(AuthorName::getName)
+                .containsExactly("Ada", "Grace");
+    }
+
+    @Test
+    void whereHas_worksWithExistsAndCount() {
+        Author ada = new Author();
+        ada.setName("Ada");
+        Book thick = new Book();
+        thick.setTitle("Thick");
+        thick.setPages(200);
+        ada.addBook(thick);
+        authors.save(ada);
+
+        assertThat(authors.query()
+                        .whereHas("books", f -> f.whereGt("pages", 100))
+                        .exists())
+                .isTrue();
+        assertThat(authors.query()
+                        .whereHas("books", f -> f.whereGt("pages", 100))
+                        .count())
+                .isEqualTo(1);
+        assertThat(authors.query()
+                        .whereHas("books", f -> f.whereGt("pages", 999))
+                        .exists())
+                .isFalse();
     }
 
     @Test

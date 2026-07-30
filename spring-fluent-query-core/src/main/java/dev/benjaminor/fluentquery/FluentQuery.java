@@ -2369,6 +2369,31 @@ public final class FluentQuery<T> {
     }
 
     /**
+     * {@code orderByDesc(attribute)} + {@link #first(Class)}.
+     *
+     * @param <R>            projection type
+     * @param attribute      sort attribute (descending)
+     * @param projectionType interface or DTO class
+     * @return latest projected result, or empty
+     */
+    public <R> Optional<R> latest(SingularAttribute<? super T, ?> attribute, Class<R> projectionType) {
+        return latest(attrName(attribute), projectionType);
+    }
+
+    /**
+     * Same as {@link #latest(SingularAttribute, Class)} but throws when empty.
+     *
+     * @param <R>            projection type
+     * @param attribute      sort attribute (descending)
+     * @param projectionType interface or DTO class
+     * @return latest projected result
+     * @throws FluentQueryNotFoundException if no row matches
+     */
+    public <R> R latestOrFail(SingularAttribute<? super T, ?> attribute, Class<R> projectionType) {
+        return latestOrFail(attrName(attribute), projectionType);
+    }
+
+    /**
      * {@code orderByAsc(attribute)} + {@link #first()}.
      *
      * @param attribute sort attribute (ascending)
@@ -2376,6 +2401,63 @@ public final class FluentQuery<T> {
      */
     public Optional<T> oldest(SingularAttribute<? super T, ?> attribute) {
         return oldest(attrName(attribute));
+    }
+
+    /**
+     * {@code orderByAsc(attribute)} + {@link #first(Class)}.
+     *
+     * @param <R>            projection type
+     * @param attribute      sort attribute (ascending)
+     * @param projectionType interface or DTO class
+     * @return oldest projected result, or empty
+     */
+    public <R> Optional<R> oldest(SingularAttribute<? super T, ?> attribute, Class<R> projectionType) {
+        return oldest(attrName(attribute), projectionType);
+    }
+
+    /**
+     * Same as {@link #oldest(SingularAttribute, Class)} but throws when empty.
+     *
+     * @param <R>            projection type
+     * @param attribute      sort attribute (ascending)
+     * @param projectionType interface or DTO class
+     * @return oldest projected result
+     * @throws FluentQueryNotFoundException if no row matches
+     */
+    public <R> R oldestOrFail(SingularAttribute<? super T, ?> attribute, Class<R> projectionType) {
+        return oldestOrFail(attrName(attribute), projectionType);
+    }
+
+    /**
+     * @deprecated use {@link #latest(SingularAttribute, Class)}
+     */
+    @Deprecated(since = "0.2.1", forRemoval = false)
+    public <R> Optional<R> latestAs(SingularAttribute<? super T, ?> attribute, Class<R> projectionType) {
+        return latest(attribute, projectionType);
+    }
+
+    /**
+     * @deprecated use {@link #latestOrFail(SingularAttribute, Class)}
+     */
+    @Deprecated(since = "0.2.1", forRemoval = false)
+    public <R> R latestAsOrFail(SingularAttribute<? super T, ?> attribute, Class<R> projectionType) {
+        return latestOrFail(attribute, projectionType);
+    }
+
+    /**
+     * @deprecated use {@link #oldest(SingularAttribute, Class)}
+     */
+    @Deprecated(since = "0.2.1", forRemoval = false)
+    public <R> Optional<R> oldestAs(SingularAttribute<? super T, ?> attribute, Class<R> projectionType) {
+        return oldest(attribute, projectionType);
+    }
+
+    /**
+     * @deprecated use {@link #oldestOrFail(SingularAttribute, Class)}
+     */
+    @Deprecated(since = "0.2.1", forRemoval = false)
+    public <R> R oldestAsOrFail(SingularAttribute<? super T, ?> attribute, Class<R> projectionType) {
+        return oldestOrFail(attribute, projectionType);
     }
 
     /**
@@ -2642,13 +2724,13 @@ public final class FluentQuery<T> {
      *
      * <p><b>Honest contract (JPA):</b>
      * <ul>
-     *   <li>With interface/DTO terminals ({@link #firstAs}, {@link #getAs}, {@link #pageAs}) —
+     *   <li>With interface/DTO terminals ({@link #first(Class)}, {@link #get(Class)}, {@link #page(Pageable, Class)}) —
      *       Spring Data can limit the selected columns to these property paths. Prefer this
      *       when you want a lean SQL projection.</li>
      *   <li>With entity terminals ({@link #get}, {@link #first}, …) — JPA cannot return a
      *       “partial entity” the way Eloquent returns a model with only some attributes;
      *       {@code project} applies Spring Data’s property/EntityGraph rules. For true
-     *       column trimming, use {@code select(...).getAs(YourProjection.class)}.</li>
+     *       column trimming, use {@code select(...).get(YourProjection.class)}.</li>
      * </ul>
      *
      * @param columns attribute names, property paths (e.g. {@code "email"}), or compact
@@ -2659,7 +2741,7 @@ public final class FluentQuery<T> {
      * @throws NullPointerException     if {@code columns} or an element is {@code null}
      * @throws IllegalArgumentException if {@code columns} is empty or an element is blank/malformed
      * @see #select(java.util.Collection)
-     * @see #firstAs(Class)
+     * @see #first(Class)
      * @see SelectPaths
      */
     public FluentQuery<T> select(String... columns) {
@@ -2724,7 +2806,7 @@ public final class FluentQuery<T> {
      *
      * <p><b>Not</b> a column list: {@code "status:id,name"} is rejected. JPA loads the full
      * managed association; for lean columns use
-     * {@code select("status:id,name").getAs(Projection.class)} instead.
+     * {@code select("status:id,name").get(Projection.class)} instead.
      *
      * @param associations to-one association names or dotted paths
      * @return {@code this} for chaining
@@ -3144,6 +3226,58 @@ public final class FluentQuery<T> {
     }
 
     /**
+     * Interface/DTO projection (Spring Data {@code as}). No entity join-fetch;
+     * uses predicates + sort/limit. Combine with {@link #select(String...)} to limit
+     * projected properties (recommended for lean SQL).
+     *
+     * <p>Fails fast if {@link #fetch}/{@link #fetchCollection} were configured —
+     * projections do not apply those joins; use entity terminals without a {@code Class}
+     * for eager loads, or {@code select(...).first(Projection.class)} without fetch.
+     *
+     * @param <R>            projection type
+     * @param projectionType interface or DTO class
+     * @return first projected result, or empty
+     * @throws NullPointerException  if {@code projectionType} is {@code null}
+     * @throws IllegalStateException if join fetches were configured
+     */
+    public <R> Optional<R> first(Class<R> projectionType) {
+        Objects.requireNonNull(projectionType, "projectionType");
+        ensureNoFetchesForProjection("first");
+        ensureOpen();
+        try {
+            return executor.findBy(predicateSpec(), q -> configure(q.as(projectionType)).limit(1).first());
+        } finally {
+            markConsumed();
+        }
+    }
+
+    /**
+     * Same as {@link #first(Class)} but throws when empty.
+     *
+     * @param <R>            projection type
+     * @param projectionType interface or DTO class
+     * @return first projected result
+     * @throws FluentQueryNotFoundException if no row matches
+     * @throws NullPointerException         if {@code projectionType} is {@code null}
+     * @throws IllegalStateException        if join fetches were configured
+     */
+    public <R> R firstOrFail(Class<R> projectionType) {
+        return first(projectionType).orElseThrow(
+                () -> new FluentQueryNotFoundException("No result found for query"));
+    }
+
+    /**
+     * Same as {@link #first(Class)} but returns {@code null} instead of empty.
+     *
+     * @param <R>            projection type
+     * @param projectionType interface or DTO class
+     * @return first projected result, or {@code null}
+     */
+    public <R> R firstOrNull(Class<R> projectionType) {
+        return first(projectionType).orElse(null);
+    }
+
+    /**
      * {@code orderByDesc(property)} + {@link #first()}.
      *
      * @param property sort property (descending)
@@ -3164,6 +3298,44 @@ public final class FluentQuery<T> {
     }
 
     /**
+     * {@code orderByDesc(property)} + {@link #first(Class)}.
+     *
+     * @param <R>            projection type
+     * @param property       sort property (descending)
+     * @param projectionType interface or DTO class
+     * @return latest projected result, or empty
+     */
+    public <R> Optional<R> latest(String property, Class<R> projectionType) {
+        return orderByDesc(property).first(projectionType);
+    }
+
+    /**
+     * Same as {@link #latest(String, Class)} but throws when empty.
+     *
+     * @param <R>            projection type
+     * @param property       sort property (descending)
+     * @param projectionType interface or DTO class
+     * @return latest projected result
+     * @throws FluentQueryNotFoundException if no row matches
+     */
+    public <R> R latestOrFail(String property, Class<R> projectionType) {
+        return latest(property, projectionType).orElseThrow(
+                () -> new FluentQueryNotFoundException("No result found for query"));
+    }
+
+    /**
+     * Same as {@link #latest(String, Class)} but returns {@code null} instead of empty.
+     *
+     * @param <R>            projection type
+     * @param property       sort property (descending)
+     * @param projectionType interface or DTO class
+     * @return latest projected result, or {@code null}
+     */
+    public <R> R latestOrNull(String property, Class<R> projectionType) {
+        return latest(property, projectionType).orElse(null);
+    }
+
+    /**
      * {@code orderByAsc(property)} + {@link #first()}.
      *
      * @param property sort property (ascending)
@@ -3181,6 +3353,44 @@ public final class FluentQuery<T> {
      */
     public T oldestOrNull(String property) {
         return oldest(property).orElse(null);
+    }
+
+    /**
+     * {@code orderByAsc(property)} + {@link #first(Class)}.
+     *
+     * @param <R>            projection type
+     * @param property       sort property (ascending)
+     * @param projectionType interface or DTO class
+     * @return oldest projected result, or empty
+     */
+    public <R> Optional<R> oldest(String property, Class<R> projectionType) {
+        return orderByAsc(property).first(projectionType);
+    }
+
+    /**
+     * Same as {@link #oldest(String, Class)} but throws when empty.
+     *
+     * @param <R>            projection type
+     * @param property       sort property (ascending)
+     * @param projectionType interface or DTO class
+     * @return oldest projected result
+     * @throws FluentQueryNotFoundException if no row matches
+     */
+    public <R> R oldestOrFail(String property, Class<R> projectionType) {
+        return oldest(property, projectionType).orElseThrow(
+                () -> new FluentQueryNotFoundException("No result found for query"));
+    }
+
+    /**
+     * Same as {@link #oldest(String, Class)} but returns {@code null} instead of empty.
+     *
+     * @param <R>            projection type
+     * @param property       sort property (ascending)
+     * @param projectionType interface or DTO class
+     * @return oldest projected result, or {@code null}
+     */
+    public <R> R oldestOrNull(String property, Class<R> projectionType) {
+        return oldest(property, projectionType).orElse(null);
     }
 
     /**
@@ -3233,6 +3443,57 @@ public final class FluentQuery<T> {
     }
 
     /**
+     * Exactly zero or one projected row (Spring Data {@code as} + {@code one()}).
+     *
+     * <p>Unlike {@link #first(Class)}, fails when <strong>more than one</strong> row matches
+     * ({@link org.springframework.dao.IncorrectResultSizeDataAccessException}).
+     *
+     * @param <R>            projection type
+     * @param projectionType interface or DTO class
+     * @return the single projected result, or empty if none
+     * @throws NullPointerException  if {@code projectionType} is {@code null}
+     * @throws IllegalStateException if join fetches were configured
+     * @throws org.springframework.dao.IncorrectResultSizeDataAccessException if 2+ rows match
+     */
+    public <R> Optional<R> one(Class<R> projectionType) {
+        Objects.requireNonNull(projectionType, "projectionType");
+        ensureNoFetchesForProjection("one");
+        ensureOpen();
+        try {
+            return executor.findBy(predicateSpec(), q -> configure(q.as(projectionType)).one());
+        } finally {
+            markConsumed();
+        }
+    }
+
+    /**
+     * Same as {@link #one(Class)} but throws when empty.
+     *
+     * @param <R>            projection type
+     * @param projectionType interface or DTO class
+     * @return the single projected result
+     * @throws FluentQueryNotFoundException if no row matches
+     * @throws NullPointerException         if {@code projectionType} is {@code null}
+     * @throws IllegalStateException        if join fetches were configured
+     * @throws org.springframework.dao.IncorrectResultSizeDataAccessException if 2+ rows match
+     */
+    public <R> R oneOrFail(Class<R> projectionType) {
+        return one(projectionType).orElseThrow(
+                () -> new FluentQueryNotFoundException("No result found for query"));
+    }
+
+    /**
+     * Same as {@link #one(Class)} but returns {@code null} instead of empty.
+     *
+     * @param <R>            projection type
+     * @param projectionType interface or DTO class
+     * @return the single projected result, or {@code null}
+     */
+    public <R> R oneOrNull(Class<R> projectionType) {
+        return one(projectionType).orElse(null);
+    }
+
+    /**
      * All matching rows (respects {@link #limit(int)}).
      * Without a limit this can be expensive — prefer {@link #page(Pageable)} / {@link #slice(Pageable)}.
      *
@@ -3243,6 +3504,26 @@ public final class FluentQuery<T> {
         assertNoCollectionFetchWithLimit();
         try {
             return executor.findBy(selectSpec(), q -> configure(q).all());
+        } finally {
+            markConsumed();
+        }
+    }
+
+    /**
+     * All rows as a projection (respects {@link #limit(int)}).
+     *
+     * @param <R>            projection type
+     * @param projectionType interface or DTO class
+     * @return projected results
+     * @throws NullPointerException  if {@code projectionType} is {@code null}
+     * @throws IllegalStateException if join fetches were configured
+     */
+    public <R> List<R> get(Class<R> projectionType) {
+        Objects.requireNonNull(projectionType, "projectionType");
+        ensureNoFetchesForProjection("get");
+        ensureOpen();
+        try {
+            return executor.findBy(predicateSpec(), q -> configure(q.as(projectionType)).all());
         } finally {
             markConsumed();
         }
@@ -3261,6 +3542,28 @@ public final class FluentQuery<T> {
         Pageable effective = resolvePageable(pageable);
         try {
             return executor.findBy(selectSpec(), q -> configureSortOnly(q).page(effective));
+        } finally {
+            markConsumed();
+        }
+    }
+
+    /**
+     * Page of projections with COUNT. {@code projectionType} last (Spring Data style).
+     *
+     * @param <R>            projection type
+     * @param pageable       page request; {@code null} uses defaults
+     * @param projectionType interface or DTO class
+     * @return a page of projected results
+     * @throws NullPointerException  if {@code projectionType} is {@code null}
+     * @throws IllegalStateException if join fetches were configured
+     */
+    public <R> Page<R> page(Pageable pageable, Class<R> projectionType) {
+        Objects.requireNonNull(projectionType, "projectionType");
+        ensureNoFetchesForProjection("page");
+        ensureOpen();
+        Pageable effective = resolvePageable(pageable);
+        try {
+            return executor.findBy(predicateSpec(), q -> configureSortOnly(q.as(projectionType)).page(effective));
         } finally {
             markConsumed();
         }
@@ -3286,6 +3589,25 @@ public final class FluentQuery<T> {
     }
 
     /**
+     * Eloquent-style alias for {@link #page(Pageable, Class)} using a 0-based {@code page} index.
+     *
+     * @param <R>            projection type
+     * @param page           0-based page index
+     * @param size           page size ({@code > 0})
+     * @param projectionType interface or DTO class
+     * @return a page of projected results
+     */
+    public <R> Page<R> paginate(int page, int size, Class<R> projectionType) {
+        if (page < 0) {
+            throw new IllegalArgumentException("page must be >= 0");
+        }
+        if (size <= 0) {
+            throw new IllegalArgumentException("size must be > 0");
+        }
+        return page(PageRequest.of(page, size, sort), projectionType);
+    }
+
+    /**
      * Slice <b>without</b> COUNT (better for infinite scroll).
      * Do not combine with {@link #fetchCollection(String...)}.
      *
@@ -3299,6 +3621,28 @@ public final class FluentQuery<T> {
         Pageable effective = resolvePageable(pageable);
         try {
             return executor.findBy(selectSpec(), q -> configureSortOnly(q).slice(effective));
+        } finally {
+            markConsumed();
+        }
+    }
+
+    /**
+     * Slice of projections <b>without</b> COUNT (better for infinite scroll).
+     *
+     * @param <R>            projection type
+     * @param pageable       page request; {@code null} uses defaults
+     * @param projectionType interface or DTO class
+     * @return a slice of projected results
+     * @throws NullPointerException  if {@code projectionType} is {@code null}
+     * @throws IllegalStateException if join fetches were configured
+     */
+    public <R> Slice<R> slice(Pageable pageable, Class<R> projectionType) {
+        Objects.requireNonNull(projectionType, "projectionType");
+        ensureNoFetchesForProjection("slice");
+        ensureOpen();
+        Pageable effective = resolvePageable(pageable);
+        try {
+            return executor.findBy(predicateSpec(), q -> configureSortOnly(q.as(projectionType)).slice(effective));
         } finally {
             markConsumed();
         }
@@ -3348,74 +3692,109 @@ public final class FluentQuery<T> {
         return executor.findBy(selectSpec(), q -> configure(q).stream());
     }
 
-    /**
-     * Interface/DTO projection (Spring Data {@code as}). No entity join-fetch;
-     * uses predicates + sort/limit. Combine with {@link #select(String...)} to limit
-     * projected properties (recommended for lean SQL).
-     *
-     * <p>Fails fast if {@link #fetch}/{@link #fetchCollection} were configured —
-     * projections do not apply those joins; use {@link #first()}/{@link #get()}/{@link #page}
-     * for entity fetches, or {@code select(...).firstAs(...)} without fetch.
-     *
-     * @param <R>            projection type
-     * @param projectionType interface or DTO class
-     * @return first projected result, or empty
-     * @throws NullPointerException     if {@code projectionType} is {@code null}
-     * @throws IllegalStateException    if join fetches were configured
-     */
+    // -------------------------------------------------------------------------
+    // Deprecated *As aliases (prefer Class overloads on first/one/get/page/…)
+    // -------------------------------------------------------------------------
+
+    /** @deprecated use {@link #first(Class)} */
+    @Deprecated(since = "0.2.1", forRemoval = false)
     public <R> Optional<R> firstAs(Class<R> projectionType) {
-        Objects.requireNonNull(projectionType, "projectionType");
-        ensureNoFetchesForProjection("firstAs");
-        ensureOpen();
-        try {
-            return executor.findBy(predicateSpec(), q -> configure(q.as(projectionType)).limit(1).first());
-        } finally {
-            markConsumed();
-        }
+        return first(projectionType);
     }
 
-    /**
-     * All rows as a projection (respects {@link #limit(int)}).
-     *
-     * @param <R>            projection type
-     * @param projectionType interface or DTO class
-     * @return projected results
-     * @throws NullPointerException if {@code projectionType} is {@code null}
-     */
+    /** @deprecated use {@link #firstOrFail(Class)} */
+    @Deprecated(since = "0.2.1", forRemoval = false)
+    public <R> R firstAsOrFail(Class<R> projectionType) {
+        return firstOrFail(projectionType);
+    }
+
+    /** @deprecated use {@link #firstOrNull(Class)} */
+    @Deprecated(since = "0.2.1", forRemoval = false)
+    public <R> R firstAsOrNull(Class<R> projectionType) {
+        return firstOrNull(projectionType);
+    }
+
+    /** @deprecated use {@link #one(Class)} */
+    @Deprecated(since = "0.2.1", forRemoval = false)
+    public <R> Optional<R> oneAs(Class<R> projectionType) {
+        return one(projectionType);
+    }
+
+    /** @deprecated use {@link #oneOrFail(Class)} */
+    @Deprecated(since = "0.2.1", forRemoval = false)
+    public <R> R oneAsOrFail(Class<R> projectionType) {
+        return oneOrFail(projectionType);
+    }
+
+    /** @deprecated use {@link #oneOrNull(Class)} */
+    @Deprecated(since = "0.2.1", forRemoval = false)
+    public <R> R oneAsOrNull(Class<R> projectionType) {
+        return oneOrNull(projectionType);
+    }
+
+    /** @deprecated use {@link #latest(String, Class)} */
+    @Deprecated(since = "0.2.1", forRemoval = false)
+    public <R> Optional<R> latestAs(String property, Class<R> projectionType) {
+        return latest(property, projectionType);
+    }
+
+    /** @deprecated use {@link #latestOrFail(String, Class)} */
+    @Deprecated(since = "0.2.1", forRemoval = false)
+    public <R> R latestAsOrFail(String property, Class<R> projectionType) {
+        return latestOrFail(property, projectionType);
+    }
+
+    /** @deprecated use {@link #latestOrNull(String, Class)} */
+    @Deprecated(since = "0.2.1", forRemoval = false)
+    public <R> R latestAsOrNull(String property, Class<R> projectionType) {
+        return latestOrNull(property, projectionType);
+    }
+
+    /** @deprecated use {@link #oldest(String, Class)} */
+    @Deprecated(since = "0.2.1", forRemoval = false)
+    public <R> Optional<R> oldestAs(String property, Class<R> projectionType) {
+        return oldest(property, projectionType);
+    }
+
+    /** @deprecated use {@link #oldestOrFail(String, Class)} */
+    @Deprecated(since = "0.2.1", forRemoval = false)
+    public <R> R oldestAsOrFail(String property, Class<R> projectionType) {
+        return oldestOrFail(property, projectionType);
+    }
+
+    /** @deprecated use {@link #oldestOrNull(String, Class)} */
+    @Deprecated(since = "0.2.1", forRemoval = false)
+    public <R> R oldestAsOrNull(String property, Class<R> projectionType) {
+        return oldestOrNull(property, projectionType);
+    }
+
+    /** @deprecated use {@link #get(Class)} */
+    @Deprecated(since = "0.2.1", forRemoval = false)
     public <R> List<R> getAs(Class<R> projectionType) {
-        Objects.requireNonNull(projectionType, "projectionType");
-        ensureNoFetchesForProjection("getAs");
-        ensureOpen();
-        try {
-            return executor.findBy(predicateSpec(), q -> configure(q.as(projectionType)).all());
-        } finally {
-            markConsumed();
-        }
+        return get(projectionType);
     }
 
-    /**
-     * Page of projections with COUNT.
-     *
-     * @param <R>            projection type
-     * @param projectionType interface or DTO class
-     * @param pageable       page request; {@code null} uses defaults
-     * @return a page of projected results
-     * @throws NullPointerException if {@code projectionType} is {@code null}
-     */
+    /** @deprecated use {@link #page(Pageable, Class)} — Class last */
+    @Deprecated(since = "0.2.1", forRemoval = false)
     public <R> Page<R> pageAs(Class<R> projectionType, Pageable pageable) {
-        Objects.requireNonNull(projectionType, "projectionType");
-        ensureNoFetchesForProjection("pageAs");
-        ensureOpen();
-        Pageable effective = resolvePageable(pageable);
-        try {
-            return executor.findBy(predicateSpec(), q -> configureSortOnly(q.as(projectionType)).page(effective));
-        } finally {
-            markConsumed();
-        }
+        return page(pageable, projectionType);
+    }
+
+    /** @deprecated use {@link #paginate(int, int, Class)} — Class last */
+    @Deprecated(since = "0.2.1", forRemoval = false)
+    public <R> Page<R> paginateAs(Class<R> projectionType, int page, int size) {
+        return paginate(page, size, projectionType);
+    }
+
+    /** @deprecated use {@link #slice(Pageable, Class)} — Class last */
+    @Deprecated(since = "0.2.1", forRemoval = false)
+    public <R> Slice<R> sliceAs(Class<R> projectionType, Pageable pageable) {
+        return slice(pageable, projectionType);
     }
 
     /**
-     * Existence check — predicates only (no fetch).
+     * Existence check — predicates only (no fetch). Works with {@link #whereHas} /
+     * {@link #whereDoesntHave} (relation filters are predicates, not join-fetch).
      *
      * @return {@code true} if at least one row matches
      */
@@ -3429,7 +3808,8 @@ public final class FluentQuery<T> {
     }
 
     /**
-     * Count — predicates only (no fetch).
+     * Count — predicates only (no fetch). Works with {@link #whereHas} /
+     * {@link #whereDoesntHave} (relation filters are predicates, not join-fetch).
      *
      * @return number of matching rows
      */
@@ -3862,7 +4242,7 @@ public final class FluentQuery<T> {
         if (!fetchToOne.isEmpty() || !fetchCollections.isEmpty()) {
             throw new IllegalStateException(
                     terminal + " ignores join fetches; remove fetch()/fetchCollection()/with*() "
-                            + "or use first()/get()/page() for entity results with eager loads. "
+                            + "or use first()/get()/page() without a Class for entity results with eager loads. "
                             + "For lean projections, use select(...) without fetch.");
         }
     }
@@ -3880,7 +4260,7 @@ public final class FluentQuery<T> {
                 throw new IllegalArgumentException(
                         "fetch/fetchCollection does not support column lists (got '" + a + "'). "
                                 + "JOIN FETCH always loads the full association. "
-                                + "Use select(\"" + a + "\") with getAs/firstAs for a lean projection, "
+                                + "Use select(\"" + a + "\") with get(Class)/first(Class) for a lean projection, "
                                 + "or fetch(\"" + name.substring(0, name.indexOf(':')).trim()
                                 + "\") to eager-load the whole association.");
             }

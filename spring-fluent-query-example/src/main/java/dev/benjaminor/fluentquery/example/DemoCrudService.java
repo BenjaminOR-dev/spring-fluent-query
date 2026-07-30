@@ -36,6 +36,17 @@ public class DemoCrudService {
                 .first();
     }
 
+    /**
+     * Read — lean projection for API-style responses (no entity graph in JSON).
+     */
+    @Transactional(readOnly = true)
+    public DemoSummary readSummaryById(Long id) {
+        return repository.query()
+                .where("id", id)
+                .select("id", "name")
+                .oneOrFail(DemoSummary.class);
+    }
+
     /** Read — list with optional search. */
     @Transactional(readOnly = true)
     public List<DemoEntity> search(String nameFragment) {
